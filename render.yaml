@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: news-fundamentals-technicals-stock-scanner-v1
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    disk:
+      name: scanner-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATA_DIR
+        value: /var/data
+      - key: DATABASE_PATH
+        value: /var/data/scanner.db
+      - key: ARTIFACTS_DIR
+        value: /var/data/artifacts
+      - key: SETTINGS_PATH
+        value: /var/data/settings.json
+      - key: RUNTIME_STATUS_PATH
+        value: /var/data/runtime_status.json
+      - key: UNIVERSE_CACHE_PATH
+        value: /var/data/universe_cache.json
+      - key: DATA_PROVIDER
+        value: yfinance
+      - key: DEMO_MODE
+        value: false
+      - key: SCAN_TICKER_LIMIT
+        value: 120
+      - key: ENRICHMENT_LIMIT
+        value: 60
+      - key: SHORTLIST_SIZE
+        value: 20
+      - key: LOOKBACK_DAYS
+        value: 320
+      - key: NEWS_LOOKBACK_DAYS
+        value: 7
+      - key: MAX_WORKERS
+        value: 8
+      - key: STRUCTURAL_WEIGHT
+        value: 0.35
+      - key: CATALYST_WEIGHT
+        value: 0.30
+      - key: TIMING_WEIGHT
+        value: 0.35

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Latest Results</h2>
+      {% if latest %}
+      <p class="subtle">Run {{ latest.run_id }} · {{ latest.status }} · Universe {{ latest.universe_size }} · Enriched {{ latest.enrichment_size }}</p>
+      {% endif %}
+    </div>
+    {% if latest %}
+    <a class="primary-btn" href="/download/run/{{ latest.run_id }}/scan-pack">Download scan pack</a>
+    {% endif %}
+  </div>
+  {% if latest and latest.candidates %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Ticker</th>
+          <th>Company</th>
+          <th>Sector</th>
+          <th>Overall</th>
+          <th>Structural</th>
+          <th>Catalyst</th>
+          <th>Timing</th>
+          <th>Reasons</th>
+          <th>Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in latest.candidates %}
+        <tr>
+          <td>{{ row.rank }}</td>
+          <td><a href="/candidate/{{ row.ticker }}?run_id={{ latest.run_id }}">{{ row.ticker }}</a></td>
+          <td>{{ row.company_name }}</td>
+          <td>{{ row.sector }}</td>
+          <td>{{ '%.2f'|format(row.overall_score) }}</td>
+          <td>{{ '%.2f'|format(row.structural_score) }}</td>
+          <td>{{ '%.2f'|format(row.catalyst_score) }}</td>
+          <td>{{ '%.2f'|format(row.timing_score) }}</td>
+          <td>{{ (row.reason_codes or [])|join(', ') }}</td>
+          <td>{{ (row.risk_flags or [])|join(', ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>No completed scan available yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

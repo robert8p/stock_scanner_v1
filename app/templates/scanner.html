@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-grid">
+  <div class="card">
+    <h2>Scanner</h2>
+    <p>Run an on-demand scan across the configured S&amp;P 500 slice. The app combines structural, catalyst, and timing scores into an overall opportunity score.</p>
+    <button id="run-scan-btn" class="primary-btn">Run Scan</button>
+    <p class="subtle">Provider: {{ 'demo' if settings.demo_mode else settings.default_provider }} · Universe slice: {{ settings.scan_ticker_limit }} · Full enrichment cap: {{ settings.enrichment_limit }}</p>
+    <div id="scan-feedback" class="status-box">Ready</div>
+    <div class="progress-wrap">
+      <div id="scan-progress-bar" class="progress-bar"></div>
+    </div>
+    <p id="scan-progress-label" class="subtle">No active scan.</p>
+  </div>
+  <div class="card emphasis">
+    <h2>Output semantics</h2>
+    <ul>
+      <li>Opportunity Score = ranked composite score, not a probability.</li>
+      <li>Confidence band = descriptive label from score logic only.</li>
+      <li>Historical calibration arrives in Version 2.</li>
+    </ul>
+  </div>
+</section>
+
+{% if latest %}
+<section class="card">
+  <div class="section-head">
+    <h2>Latest shortlist</h2>
+    <a class="link-btn" href="/latest-results">Open latest results</a>
+  </div>
+  <p class="subtle">Run {{ latest.run_id }} · Status {{ latest.status }} · Provider {{ latest.provider }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Rank</th>
+          <th>Ticker</th>
+          <th>Company</th>
+          <th>Overall</th>
+          <th>Structural</th>
+          <th>Catalyst</th>
+          <th>Timing</th>
+          <th>Confidence band</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in latest.candidates[:settings.shortlist_size] %}
+        <tr>
+          <td>{{ row.rank }}</td>
+          <td><strong>{{ row.ticker }}</strong></td>
+          <td>{{ row.company_name }}</td>
+          <td>{{ '%.2f'|format(row.overall_score) }}</td>
+          <td>{{ '%.2f'|format(row.structural_score) }}</td>
+          <td>{{ '%.2f'|format(row.catalyst_score) }}</td>
+          <td>{{ '%.2f'|format(row.timing_score) }}</td>
+          <td>{{ row.confidence_band }}</td>
+          <td><a href="/candidate/{{ row.ticker }}?run_id={{ latest.run_id }}">Open</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+<section class="card">
+  <h2>No scans yet</h2>
+  <p>Run the first scan from this page. The latest results table and artifact downloads will appear automatically after completion.</p>
+</section>
+{% endif %}
+{% endblock %}

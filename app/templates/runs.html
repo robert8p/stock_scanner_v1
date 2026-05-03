@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Runs / Artifacts</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Universe</th>
+          <th>Enriched</th>
+          <th>Shortlist</th>
+          <th>Downloads</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td>{{ run.run_id }}</td>
+          <td>{{ run.status }}</td>
+          <td>{{ run.started_at }}</td>
+          <td>{{ run.universe_size }}</td>
+          <td>{{ run.enrichment_size }}</td>
+          <td>{{ run.shortlist_size }}</td>
+          <td>
+            {% if run.artifact_zip_path %}<a href="/download/run/{{ run.run_id }}/scan-pack">Scan pack</a>{% endif %}
+            {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/run/{{ run.run_id }}/scan_summary.json">Summary</a>{% endif %}
+            {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/run/{{ run.run_id }}/scan_log.txt">Log</a>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card form-card">
+  <h2>Settings / Data Sources</h2>
+  <p class="subtle">These settings are persisted to disk. Environment variables still control secrets and infrastructure paths.</p>
+  <form method="post" action="/settings" class="settings-form">
+    <label>Default provider
+      <select name="default_provider">
+        <option value="yfinance" {% if settings.default_provider == 'yfinance' %}selected{% endif %}>yfinance</option>
+        <option value="demo" {% if settings.default_provider == 'demo' %}selected{% endif %}>demo</option>
+      </select>
+    </label>
+    <label>Demo mode
+      <select name="demo_mode">
+        <option value="false" {% if not settings.demo_mode %}selected{% endif %}>false</option>
+        <option value="true" {% if settings.demo_mode %}selected{% endif %}>true</option>
+      </select>
+    </label>
+    <label>Universe slice size<input type="number" name="scan_ticker_limit" value="{{ settings.scan_ticker_limit }}"></label>
+    <label>Enrichment cap<input type="number" name="enrichment_limit" value="{{ settings.enrichment_limit }}"></label>
+    <label>Shortlist size<input type="number" name="shortlist_size" value="{{ settings.shortlist_size }}"></label>
+    <label>Lookback days<input type="number" name="lookback_days" value="{{ settings.lookback_days }}"></label>
+    <label>News lookback days<input type="number" name="news_lookback_days" value="{{ settings.news_lookback_days }}"></label>
+    <label>Max workers<input type="number" name="max_workers" value="{{ settings.max_workers }}"></label>
+    <label>Structural weight<input type="number" step="0.01" name="structural_weight" value="{{ settings.structural_weight }}"></label>
+    <label>Catalyst weight<input type="number" step="0.01" name="catalyst_weight" value="{{ settings.catalyst_weight }}"></label>
+    <label>Timing weight<input type="number" step="0.01" name="timing_weight" value="{{ settings.timing_weight }}"></label>
+    <button type="submit" class="primary-btn">Save settings</button>
+  </form>
+  <section class="note-box">
+    <h3>Provider note</h3>
+    <p>The architecture is provider-based, but this V1 package ships with a working yfinance path plus a deterministic demo mode for deployment smoke-testing.</p>
+    <p class="subtle">Future versions can extend this adapter layer to Polygon / Alpaca / Finnhub without changing the UI contract.</p>
+  </section>
+</section>
+{% endblock %}

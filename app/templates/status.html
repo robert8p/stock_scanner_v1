@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-grid">
+  <div class="card">
+    <h2>Health</h2>
+    <pre class="json-box">{{ health | tojson(indent=2) }}</pre>
+  </div>
+  <div class="card">
+    <h2>Runtime status</h2>
+    <pre class="json-box">{{ runtime_status | tojson(indent=2) }}</pre>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-grid">
+  <div class="card">
+    <p class="subtle">Run {{ run.run_id }}</p>
+    <h2>{{ candidate.ticker }} — {{ candidate.company_name }}</h2>
+    <p><strong>Overall opportunity score:</strong> {{ '%.2f'|format(candidate.overall_score) }} ({{ candidate.confidence_band }})</p>
+    <div class="metric-grid">
+      <div class="metric-card"><span>Structural</span><strong>{{ '%.2f'|format(candidate.structural_score) }}</strong></div>
+      <div class="metric-card"><span>Catalyst</span><strong>{{ '%.2f'|format(candidate.catalyst_score) }}</strong></div>
+      <div class="metric-card"><span>Timing</span><strong>{{ '%.2f'|format(candidate.timing_score) }}</strong></div>
+    </div>
+    <p><strong>Technical summary:</strong> {{ candidate.technical_summary }}</p>
+    <p><strong>Fundamental summary:</strong> {{ candidate.fundamental_summary }}</p>
+  </div>
+  <div class="card emphasis">
+    <h2>Reason codes</h2>
+    <ul>
+      {% for reason in candidate.reason_codes or [] %}
+      <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+    <h2>Risk / caution flags</h2>
+    <ul>
+      {% for risk in candidate.risk_flags or [] %}
+      <li>{{ risk }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Latest relevant headlines used</h2>
+  {% if candidate.latest_news %}
+    {% for item in candidate.latest_news %}
+    <article class="news-item">
+      <h3>{{ item.title }}</h3>
+      <p class="subtle">{{ item.publisher }} · {{ item.published_at }}</p>
+      {% if item.summary %}<p>{{ item.summary }}</p>{% endif %}
+      {% if item.link %}<p><a href="{{ item.link }}" target="_blank" rel="noreferrer">Open source</a></p>{% endif %}
+    </article>
+    {% endfor %}
+  {% else %}
+    <p>No relevant news was captured for this ticker in the current scan window.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Feature snapshot</h2>
+  <pre class="json-box">{{ candidate.feature_snapshot | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}
