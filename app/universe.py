@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List
 
@@ -9,6 +10,9 @@ import requests
 
 from .config import load_settings
 from .storage import utc_now_iso
+
+
+UNIVERSE_CACHE_TTL_DAYS = 7
 
 
 LOCAL_FALLBACK_UNIVERSE = [
@@ -68,12 +72,26 @@ LOCAL_FALLBACK_UNIVERSE = [
 def load_universe() -> List[Dict[str, str]]:
     settings = load_settings()
     cache_path = Path(settings.universe_cache_path)
+    cached_rows: List[Dict[str, str]] = []
     if cache_path.exists():
         try:
             payload = json.loads(cache_path.read_text())
-            rows = payload.get("rows", [])
-            if rows:
-                return rows
+            cached_rows = payload.get("rows", []) or []
+            fetched_at_raw = payload.get("fetched_at", "")
+            cache_fresh = True
+            if fetched_at_raw:
+                try:
+                    fetched_at = datetime.fromisoformat(fetched_at_raw.replace("Z", "+00:00"))
+                    if fetched_at.tzinfo is None:
+                        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+                    cache_fresh = (datetime.now(timezone.utc) - fetched_at) < timedelta(days=UNIVERSE_CACHE_TTL_DAYS)
+                except Exception:
+                    cache_fresh = False
+            else:
+                # Legacy cache with no timestamp — treat as stale and try to refresh
+                cache_fresh = False
+            if cached_rows and cache_fresh:
+                return cached_rows
         except json.JSONDecodeError:
             pass
 
@@ -88,4 +106,7 @@ def load_universe() -> List[Dict[str, str]]:
     except Exception:
         pass
 
+    # Refresh failed — prefer stale cached rows over the small hardcoded fallback
+    if cached_rows:
+        return cached_rows
     return LOCAL_FALLBACK_UNIVERSE

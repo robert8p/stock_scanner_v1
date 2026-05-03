@@ -48,8 +48,9 @@ def health() -> Dict[str, Any]:
 def scanner_page(request: Request):
     latest = latest_run_with_candidates()
     return templates.TemplateResponse(
-        "scanner.html",
-        {"request": request, "settings": load_settings(), "latest": latest, "runtime_status": get_runtime_status()},
+        request=request,
+        name="scanner.html",
+        context={"request": request, "settings": load_settings(), "latest": latest, "runtime_status": get_runtime_status()},
     )
 
 
@@ -57,8 +58,9 @@ def scanner_page(request: Request):
 def latest_results_page(request: Request):
     latest = latest_run_with_candidates()
     return templates.TemplateResponse(
-        "latest_results.html",
-        {"request": request, "latest": latest, "runtime_status": get_runtime_status()},
+        request=request,
+        name="latest_results.html",
+        context={"request": request, "latest": latest, "runtime_status": get_runtime_status()},
     )
 
 
@@ -71,22 +73,24 @@ def candidate_page(request: Request, ticker: str, run_id: str | None = None):
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return templates.TemplateResponse(
-        "candidate_detail.html",
-        {"request": request, "run": run, "candidate": candidate},
+        request=request,
+        name="candidate_detail.html",
+        context={"request": request, "run": run, "candidate": candidate},
     )
 
 
 @app.get("/runs", response_class=HTMLResponse)
 def runs_page(request: Request):
     runs = [deserialize_run(run) for run in list_runs(limit=50)]
-    return templates.TemplateResponse("runs.html", {"request": request, "runs": runs})
+    return templates.TemplateResponse(request=request, name="runs.html", context={"request": request, "runs": runs})
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
     return templates.TemplateResponse(
-        "settings.html",
-        {"request": request, "settings": load_settings()},
+        request=request,
+        name="settings.html",
+        context={"request": request, "settings": load_settings()},
     )
 
 
@@ -126,8 +130,9 @@ def update_settings_page(
 @app.get("/status", response_class=HTMLResponse)
 def status_page(request: Request):
     return templates.TemplateResponse(
-        "status.html",
-        {"request": request, "health": health(), "runtime_status": get_runtime_status()},
+        request=request,
+        name="status.html",
+        context={"request": request, "health": health(), "runtime_status": get_runtime_status()},
     )
 
 
@@ -181,6 +186,17 @@ def api_artifacts(limit: int = 20):
     return {"runs": runs}
 
 
+@app.get("/download/run/{run_id}/scan-pack")
+def download_scan_pack(run_id: str):
+    run = get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    zip_path = Path(run.get("artifact_zip_path") or "")
+    if not zip_path.exists():
+        raise HTTPException(status_code=404, detail="Scan pack not found")
+    return FileResponse(zip_path, filename=zip_path.name)
+
+
 @app.get("/download/run/{run_id}/{filename}")
 def download_artifact(run_id: str, filename: str):
     run = get_run(run_id)
@@ -191,17 +207,6 @@ def download_artifact(run_id: str, filename: str):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Artifact not found")
     return FileResponse(target, filename=target.name)
-
-
-@app.get("/download/run/{run_id}/scan-pack")
-def download_scan_pack(run_id: str):
-    run = get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    zip_path = Path(run.get("artifact_zip_path") or "")
-    if not zip_path.exists():
-        raise HTTPException(status_code=404, detail="Scan pack not found")
-    return FileResponse(zip_path, filename=zip_path.name)
 
 
 @app.get("/api/settings")

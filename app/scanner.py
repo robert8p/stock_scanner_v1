@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,7 +42,12 @@ class ScanCooldownError(RuntimeError):
 
 def _persist_runtime_status(status: Dict[str, Any]) -> None:
     settings = load_settings()
-    Path(settings.runtime_status_path).write_text(json.dumps(status, indent=2))
+    try:
+        Path(settings.runtime_status_path).write_text(json.dumps(status, indent=2))
+    except Exception:
+        # Status persistence is advisory only; never let a disk failure
+        # propagate up and crash the scan thread mid-run.
+        pass
 
 
 
@@ -67,17 +71,13 @@ def _update_status(**kwargs: Any) -> None:
 
 
 
-def _safe_name(value: str) -> str:
-    return value.replace(":", "").replace("+", "").replace("-", "")
-
-
-
 def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List[Dict[str, str]], settings) -> List[Dict[str, str]]:
     benchmark_spy = history_map.get("SPY")
+    benchmark_set = {"SPY"} | set(SECTOR_ETF_MAP.values())
     scored = []
     universe_by_ticker = {row["symbol"]: row for row in universe_rows}
     for ticker, frame in history_map.items():
-        if ticker in {"SPY"} or ticker.startswith("XL"):
+        if ticker in benchmark_set:
             continue
         sector = universe_by_ticker.get(ticker, {}).get("sector", "")
         sector_etf = SECTOR_ETF_MAP.get(sector)
@@ -125,12 +125,16 @@ def run_scan_now() -> str:
     global LAST_SCAN_STARTED_AT
     settings = load_settings()
     now = time.time()
-    if now - LAST_SCAN_STARTED_AT < settings.scan_cooldown_seconds:
-        raise ScanCooldownError("A scan was started very recently. Please wait a few seconds and try again.")
     with STATUS_LOCK:
+        if now - LAST_SCAN_STARTED_AT < settings.scan_cooldown_seconds:
+            raise ScanCooldownError("A scan was started very recently. Please wait a few seconds and try again.")
         if SCAN_STATUS.get("is_running"):
             raise ScanAlreadyRunningError("A scan is already in progress.")
         LAST_SCAN_STARTED_AT = now
+        SCAN_STATUS["is_running"] = True
+        SCAN_STATUS["phase"] = "starting"
+        SCAN_STATUS["message"] = "Preparing scan"
+        SCAN_STATUS["updated_at"] = utc_now_iso()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
     thread = threading.Thread(target=_run_scan_thread, args=(run_id,), daemon=True)
     thread.start()

@@ -253,7 +253,10 @@ def score_structural(bundle: TickerDataBundle) -> Tuple[float, List[str], List[s
 
     debt_to_equity = _safe_float(f.get("debtToEquity"))
     if debt_to_equity is not None:
-        if debt_to_equity < 60:
+        if debt_to_equity < 0:
+            score -= 6
+            risks.append("Negative book equity (distressed balance sheet)")
+        elif debt_to_equity < 60:
             score += 6
             reasons.append("Balance sheet looks manageable")
         elif debt_to_equity > 180:

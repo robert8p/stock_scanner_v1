@@ -85,7 +85,16 @@ class YFinanceProvider(BaseDataProvider):
                         continue
                     published_at = published_dt.isoformat()
                 elif isinstance(published_at_raw, str):
-                    published_at = published_at_raw
+                    try:
+                        parsed = datetime.fromisoformat(published_at_raw.replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        if parsed < cutoff:
+                            continue
+                        published_at = parsed.isoformat()
+                    except Exception:
+                        # Could not parse — keep raw string but apply no cutoff
+                        published_at = published_at_raw
                 news_items.append(
                     NewsItem(
                         title=title,
