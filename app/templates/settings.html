@@ -16,8 +16,8 @@
         <option value="true" {% if settings.demo_mode %}selected{% endif %}>true</option>
       </select>
     </label>
-    <label>Universe slice size<input type="number" name="scan_ticker_limit" value="{{ settings.scan_ticker_limit }}"></label>
-    <label>Enrichment cap<input type="number" name="enrichment_limit" value="{{ settings.enrichment_limit }}"></label>
+    <label>Universe scan cap<input type="number" name="scan_ticker_limit" value="{{ settings.scan_ticker_limit }}"></label>
+    <label>Full-enrichment cap<input type="number" name="enrichment_limit" value="{{ settings.enrichment_limit }}"></label>
     <label>Shortlist size<input type="number" name="shortlist_size" value="{{ settings.shortlist_size }}"></label>
     <label>Lookback days<input type="number" name="lookback_days" value="{{ settings.lookback_days }}"></label>
     <label>News lookback days<input type="number" name="news_lookback_days" value="{{ settings.news_lookback_days }}"></label>
@@ -29,7 +29,7 @@
   </form>
   <section class="note-box">
     <h3>Provider note</h3>
-    <p>The architecture is provider-based, but this V1 package ships with a working yfinance path plus a deterministic demo mode for deployment smoke-testing.</p>
+    <p>The architecture is provider-based. This V1.1 package ships with a working yfinance path plus a deterministic demo mode for deployment smoke-testing, and includes a bundled S&P 500 fallback file so the universe does not collapse when live scraping fails.</p>
     <p class="subtle">Future versions can extend this adapter layer to Polygon / Alpaca / Finnhub without changing the UI contract.</p>
   </section>
 </section>

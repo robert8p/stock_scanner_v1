@@ -61,6 +61,7 @@ def init_db() -> None:
                 company_name TEXT,
                 sector TEXT,
                 industry TEXT,
+                cik TEXT,
                 overall_score REAL,
                 structural_score REAL,
                 catalyst_score REAL,
@@ -76,6 +77,9 @@ def init_db() -> None:
             )
             """
         )
+        existing_candidate_cols = {row[1] for row in cur.execute("PRAGMA table_info(candidates)").fetchall()}
+        if "cik" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN cik TEXT")
 
 
 def upsert_run(record: Dict[str, Any]) -> None:

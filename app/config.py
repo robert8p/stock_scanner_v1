@@ -31,8 +31,8 @@ class AppSettings:
     default_provider: str = os.getenv("DATA_PROVIDER", "yfinance")
     demo_mode: bool = _env_bool("DEMO_MODE", False)
     default_universe_name: str = os.getenv("DEFAULT_UNIVERSE_NAME", "S&P 500")
-    scan_ticker_limit: int = int(os.getenv("SCAN_TICKER_LIMIT", "120"))
-    enrichment_limit: int = int(os.getenv("ENRICHMENT_LIMIT", "60"))
+    scan_ticker_limit: int = int(os.getenv("SCAN_TICKER_LIMIT", "500"))
+    enrichment_limit: int = int(os.getenv("ENRICHMENT_LIMIT", "120"))
     shortlist_size: int = int(os.getenv("SHORTLIST_SIZE", "20"))
     lookback_days: int = int(os.getenv("LOOKBACK_DAYS", "320"))
     news_lookback_days: int = int(os.getenv("NEWS_LOOKBACK_DAYS", "7"))
@@ -70,6 +70,28 @@ class AppSettings:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    def to_safe_dict(self) -> Dict[str, Any]:
+        return redact_sensitive_settings(asdict(self))
+
+
+
+
+SENSITIVE_SETTING_KEYS = {
+    "finnhub_api_key",
+    "polygon_api_key",
+    "alpaca_api_key",
+    "alpaca_api_secret",
+}
+
+
+def redact_sensitive_settings(payload: Dict[str, Any]) -> Dict[str, Any]:
+    redacted = {}
+    for key, value in payload.items():
+        if key in SENSITIVE_SETTING_KEYS and value:
+            redacted[key] = "***REDACTED***"
+        else:
+            redacted[key] = value
+    return redacted
 
 DEFAULTS = AppSettings()
 

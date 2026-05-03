@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from .config import load_settings
 from .db import deserialize_candidate, deserialize_run, list_candidates, list_runs, replace_candidates, upsert_run
 from .providers import get_provider
 from .providers.base import TickerDataBundle
-from .scoring import SECTOR_ETF_MAP, compute_timing_metrics, confidence_band, score_catalyst, score_structural, score_timing
+from .scoring import SECTOR_ETF_MAP, compute_timing_metrics, confidence_band, normalize_sector_name, score_catalyst, score_structural, score_timing
 from .storage import ensure_dir, utc_now_iso, write_csv, write_json, write_text, zip_directory
 from .universe import load_universe
 
@@ -40,15 +41,29 @@ class ScanCooldownError(RuntimeError):
     pass
 
 
+def sanitize_settings_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    sensitive = {"finnhub_api_key", "polygon_api_key", "alpaca_api_key", "alpaca_api_secret"}
+    return {key: ("***REDACTED***" if key in sensitive and value else value) for key, value in payload.items()}
+
+
 def _persist_runtime_status(status: Dict[str, Any]) -> None:
     settings = load_settings()
     try:
         Path(settings.runtime_status_path).write_text(json.dumps(status, indent=2))
     except Exception:
-        # Status persistence is advisory only; never let a disk failure
-        # propagate up and crash the scan thread mid-run.
         pass
 
+
+def _sanitize_run_for_status(run: Dict[str, Any]) -> Dict[str, Any]:
+    safe = dict(run)
+    if "settings_json" in safe and isinstance(safe["settings_json"], str):
+        try:
+            safe["settings"] = sanitize_settings_payload(json.loads(safe["settings_json"]))
+        except Exception:
+            pass
+    if "settings" in safe and isinstance(safe["settings"], dict):
+        safe["settings"] = sanitize_settings_payload(safe["settings"])
+    return safe
 
 
 def get_runtime_status() -> Dict[str, Any]:
@@ -57,9 +72,9 @@ def get_runtime_status() -> Dict[str, Any]:
     run_history = list_runs(limit=1)
     if run_history:
         latest = deserialize_run(run_history[0])
-        status["latest_run"] = latest
+        if latest:
+            status["latest_run"] = _sanitize_run_for_status(latest)
     return status
-
 
 
 def _update_status(**kwargs: Any) -> None:
@@ -70,7 +85,6 @@ def _update_status(**kwargs: Any) -> None:
     _persist_runtime_status(status)
 
 
-
 def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List[Dict[str, str]], settings) -> List[Dict[str, str]]:
     benchmark_spy = history_map.get("SPY")
     benchmark_set = {"SPY"} | set(SECTOR_ETF_MAP.values())
@@ -79,7 +93,7 @@ def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List
     for ticker, frame in history_map.items():
         if ticker in benchmark_set:
             continue
-        sector = universe_by_ticker.get(ticker, {}).get("sector", "")
+        sector = normalize_sector_name(universe_by_ticker.get(ticker, {}).get("sector", ""))
         sector_etf = SECTOR_ETF_MAP.get(sector)
         sector_history = history_map.get(sector_etf) if sector_etf else None
         metrics = compute_timing_metrics(frame, benchmark_spy, sector_history)
@@ -90,10 +104,35 @@ def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List
     return [row for row in universe_rows if row["symbol"] in keep]
 
 
-
 def _normalize_ticker(symbol: str) -> str:
     return symbol.replace(".", "-").upper()
 
+
+def _company_dedupe_key(row: Dict[str, Any]) -> str:
+    cik = str(row.get("cik") or "").strip()
+    if cik:
+        return f"cik:{cik}"
+    company_name = (row.get("company_name") or "").lower()
+    company_name = re.sub(r"\(class [^)]+\)", "", company_name)
+    company_name = re.sub(r"[^a-z0-9]+", " ", company_name)
+    company_name = re.sub(r"(inc|corp|corporation|company|co|holdings|group|plc|class)", "", company_name)
+    company_name = re.sub(r"\s+", " ", company_name).strip()
+    return f"name:{company_name}" if company_name else f"ticker:{row.get('ticker','')}"
+
+
+def _dedupe_share_classes(rows: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], List[str]]:
+    kept: Dict[str, Dict[str, Any]] = {}
+    removed_messages: List[str] = []
+    for row in rows:
+        key = _company_dedupe_key(row)
+        existing = kept.get(key)
+        if existing is None or row["overall_score"] > existing["overall_score"]:
+            if existing is not None:
+                removed_messages.append(f"Removed duplicate share class {existing['ticker']} in favor of {row['ticker']}")
+            kept[key] = row
+        else:
+            removed_messages.append(f"Removed duplicate share class {row['ticker']} in favor of {existing['ticker']}")
+    return list(kept.values()), removed_messages
 
 
 def _build_run_record(run_id: str, settings, status: str, started_at: str, message: str = "", **extra: Any) -> Dict[str, Any]:
@@ -111,14 +150,13 @@ def _build_run_record(run_id: str, settings, status: str, started_at: str, messa
         "enrichment_size": extra.get("enrichment_size", 0),
         "shortlist_size": extra.get("shortlist_size", 0),
         "provider": "demo" if settings.demo_mode else settings.default_provider,
-        "settings_json": json.dumps(settings.to_dict(), default=str),
+        "settings_json": json.dumps(sanitize_settings_payload(settings.to_dict()), default=str),
         "warnings_json": json.dumps(extra.get("warnings", []), default=str),
         "artifacts_dir": extra.get("artifacts_dir", ""),
         "artifact_zip_path": extra.get("artifact_zip_path", ""),
         "summary_json": json.dumps(extra.get("summary", {}), default=str),
     }
     return record
-
 
 
 def run_scan_now() -> str:
@@ -141,7 +179,6 @@ def run_scan_now() -> str:
     return run_id
 
 
-
 def _run_scan_thread(run_id: str) -> None:
     settings = load_settings()
     provider = get_provider(settings.default_provider, settings.demo_mode, settings.max_workers)
@@ -155,14 +192,16 @@ def _run_scan_thread(run_id: str) -> None:
     try:
         _update_status(phase="loading_universe", message="Loading universe", progress_current=0, progress_total=1)
         universe_rows = load_universe()
-        universe_rows = [{**row, "symbol": _normalize_ticker(row["symbol"])} for row in universe_rows]
+        universe_rows = [{**row, "symbol": _normalize_ticker(row["symbol"]), "sector": normalize_sector_name(row.get("sector", ""))} for row in universe_rows if row.get("symbol")]
+        if not universe_rows:
+            raise RuntimeError("Universe loading failed; no symbols available.")
         universe_rows = universe_rows[: settings.scan_ticker_limit]
         log_lines.append(f"Universe rows loaded: {len(universe_rows)}")
 
         benchmark_tickers = ["SPY"]
         seen_sector_etfs = []
         for row in universe_rows:
-            etf = SECTOR_ETF_MAP.get(row.get("sector", ""))
+            etf = SECTOR_ETF_MAP.get(normalize_sector_name(row.get("sector", "")))
             if etf and etf not in seen_sector_etfs:
                 seen_sector_etfs.append(etf)
         bulk_tickers = [row["symbol"] for row in universe_rows] + benchmark_tickers + seen_sector_etfs
@@ -180,7 +219,7 @@ def _run_scan_thread(run_id: str) -> None:
         candidate_rows: List[Dict[str, Any]] = []
         feature_rows: List[Dict[str, Any]] = []
         total = len(enriched_universe_rows)
-        _update_status(phase="enriching_tickers", message="Fetching fundamentals and news", progress_current=0, progress_total=total)
+        _update_status(phase="enriching_tickers", message="Fetching fundamentals and news", progress_current=0, progress_total=max(total,1))
 
         benchmark_spy = history_map.get("SPY")
         bundles: Dict[str, TickerDataBundle] = {}
@@ -193,18 +232,14 @@ def _run_scan_thread(run_id: str) -> None:
         else:
             for index, row in enumerate(enriched_universe_rows, start=1):
                 bundles[row["symbol"]] = provider.fetch_ticker_bundle(row["symbol"], settings.lookback_days, settings.news_lookback_days)
-                _update_status(
-                    phase="enriching_tickers",
-                    message=f"Enriched {row['symbol']}",
-                    progress_current=index,
-                    progress_total=total,
-                )
+                _update_status(phase="enriching_tickers", message=f"Enriched {row['symbol']}", progress_current=index, progress_total=total)
 
         for index, row in enumerate(enriched_universe_rows, start=1):
             ticker = row["symbol"]
             bundle = bundles.get(ticker) or TickerDataBundle(ticker=ticker, warnings=["No bundle returned"])
             bundle.company_name = bundle.company_name or row.get("name", ticker)
-            bundle.sector = bundle.sector or row.get("sector", "")
+            bundle.sector = normalize_sector_name(bundle.sector or row.get("sector", ""))
+            bundle.industry = bundle.industry or row.get("industry", "")
             price_history = bundle.price_history if bundle.price_history is not None and not bundle.price_history.empty else history_map.get(ticker)
             sector_etf = SECTOR_ETF_MAP.get(bundle.sector or row.get("sector", ""))
             sector_history = history_map.get(sector_etf) if sector_etf else None
@@ -212,65 +247,56 @@ def _run_scan_thread(run_id: str) -> None:
             timing_metrics = compute_timing_metrics(price_history, benchmark_spy, sector_history)
             timing_score, timing_reasons, timing_risks, technical_summary = score_timing(timing_metrics)
             structural_score, structural_reasons, structural_risks, fundamental_summary = score_structural(bundle)
-            catalyst_score, catalyst_reasons, catalyst_risks, catalyst_metrics, prepared_news = score_catalyst(bundle.news)
+            catalyst_score, catalyst_reasons, catalyst_risks, catalyst_metrics, prepared_news = score_catalyst(bundle.news, ticker=ticker, company_name=bundle.company_name)
 
             combined_reasons = list(dict.fromkeys(structural_reasons + catalyst_reasons + timing_reasons))
             combined_risks = list(dict.fromkeys(bundle.warnings + structural_risks + catalyst_risks + timing_risks))
-            overall_score = round(
-                structural_score * settings.structural_weight
-                + catalyst_score * settings.catalyst_weight
-                + timing_score * settings.timing_weight,
-                2,
-            )
-            candidate_rows.append(
-                {
-                    "run_id": run_id,
-                    "rank": 0,
-                    "ticker": ticker,
-                    "company_name": bundle.company_name,
-                    "sector": bundle.sector,
-                    "industry": bundle.industry,
-                    "overall_score": overall_score,
-                    "structural_score": structural_score,
-                    "catalyst_score": catalyst_score,
-                    "timing_score": timing_score,
-                    "confidence_band": confidence_band(overall_score),
-                    "reason_codes_json": json.dumps(combined_reasons[:6]),
-                    "risk_flags_json": json.dumps(combined_risks[:6]),
-                    "latest_news_json": json.dumps(prepared_news[:5]),
-                    "technical_summary": technical_summary,
-                    "fundamental_summary": fundamental_summary,
-                    "feature_snapshot_json": json.dumps({
-                        "timing": timing_metrics,
-                        "fundamentals": bundle.fundamentals,
-                        "catalyst": catalyst_metrics,
-                    }, default=str),
-                }
-            )
-            feature_rows.append(
-                {
-                    "ticker": ticker,
-                    "company_name": bundle.company_name,
-                    "sector": bundle.sector,
-                    "overall_score": overall_score,
-                    "structural_score": structural_score,
-                    "catalyst_score": catalyst_score,
-                    "timing_score": timing_score,
-                    **{f"timing_{k}": v for k, v in timing_metrics.items() if k != "warnings"},
-                    **{f"fund_{k}": v for k, v in (bundle.fundamentals or {}).items()},
-                    **{f"catalyst_{k}": v for k, v in catalyst_metrics.items()},
-                    "risk_flags": " | ".join(combined_risks[:6]),
-                    "reason_codes": " | ".join(combined_reasons[:6]),
-                }
-            )
-            _update_status(
-                phase="scoring",
-                message=f"Scored {ticker}",
-                progress_current=index,
-                progress_total=total,
-            )
+            overall_score = round(structural_score * settings.structural_weight + catalyst_score * settings.catalyst_weight + timing_score * settings.timing_weight, 2)
+            candidate_rows.append({
+                "run_id": run_id,
+                "rank": 0,
+                "ticker": ticker,
+                "company_name": bundle.company_name,
+                "sector": bundle.sector,
+                "industry": bundle.industry,
+                "cik": row.get("cik", ""),
+                "overall_score": overall_score,
+                "structural_score": structural_score,
+                "catalyst_score": catalyst_score,
+                "timing_score": timing_score,
+                "confidence_band": confidence_band(overall_score),
+                "reason_codes_json": json.dumps(combined_reasons[:6]),
+                "risk_flags_json": json.dumps(combined_risks[:6]),
+                "latest_news_json": json.dumps(prepared_news[:5]),
+                "technical_summary": technical_summary,
+                "fundamental_summary": fundamental_summary,
+                "feature_snapshot_json": json.dumps({"timing": timing_metrics, "fundamentals": bundle.fundamentals, "catalyst": catalyst_metrics}, default=str),
+            })
+            feature_rows.append({
+                "ticker": ticker,
+                "company_name": bundle.company_name,
+                "sector": bundle.sector,
+                "overall_score": overall_score,
+                "structural_score": structural_score,
+                "catalyst_score": catalyst_score,
+                "timing_score": timing_score,
+                **{f"timing_{k}": v for k, v in timing_metrics.items() if k != "warnings"},
+                **{f"fund_{k}": v for k, v in (bundle.fundamentals or {}).items()},
+                **{f"catalyst_{k}": v for k, v in catalyst_metrics.items()},
+                "risk_flags": " | ".join(combined_risks[:6]),
+                "reason_codes": " | ".join(combined_reasons[:6]),
+                "latest_news_titles": " | ".join(item.get("title", "") for item in prepared_news[:3]),
+            })
+            _update_status(phase="scoring", message=f"Scored {ticker}", progress_current=index, progress_total=total)
 
-        ranked_rows = sorted(candidate_rows, key=lambda x: x["overall_score"], reverse=True)
+        deduped_rows, dedupe_messages = _dedupe_share_classes(candidate_rows)
+        if dedupe_messages:
+            warnings.extend(dedupe_messages[:10])
+            log_lines.extend(f"[{utc_now_iso()}] {msg}" for msg in dedupe_messages[:20])
+        deduped_tickers = {row["ticker"] for row in deduped_rows}
+        feature_rows = [row for row in feature_rows if row["ticker"] in deduped_tickers]
+
+        ranked_rows = sorted(deduped_rows, key=lambda x: x["overall_score"], reverse=True)
         for idx, row in enumerate(ranked_rows, start=1):
             row["rank"] = idx
         replace_candidates(run_id, ranked_rows)
@@ -285,12 +311,9 @@ def _run_scan_thread(run_id: str) -> None:
             "universe_size_loaded": len(universe_rows),
             "bulk_price_ticker_count": len(bulk_tickers),
             "enrichment_size": len(enriched_universe_rows),
+            "deduped_candidate_count": len(ranked_rows),
             "shortlist_size": len(shortlist_rows),
-            "score_weights": {
-                "structural": settings.structural_weight,
-                "catalyst": settings.catalyst_weight,
-                "timing": settings.timing_weight,
-            },
+            "score_weights": {"structural": settings.structural_weight, "catalyst": settings.catalyst_weight, "timing": settings.timing_weight},
             "note": "Version 1 outputs opportunity scores, not calibrated probabilities.",
             "warnings": warnings,
         }
@@ -299,83 +322,51 @@ def _run_scan_thread(run_id: str) -> None:
             row["ticker"]: {
                 "reason_codes": json.loads(row["reason_codes_json"]),
                 "risk_flags": json.loads(row["risk_flags_json"]),
+                "latest_news": json.loads(row["latest_news_json"]),
             }
             for row in ranked_rows
         }
         ranked_json_rows = []
+        ranked_csv_rows = []
         for row in ranked_rows:
             converted = dict(row)
-            converted["reason_codes"] = json.loads(converted.pop("reason_codes_json"))
-            converted["risk_flags"] = json.loads(converted.pop("risk_flags_json"))
-            converted["latest_news"] = json.loads(converted.pop("latest_news_json"))
-            converted["feature_snapshot"] = json.loads(converted.pop("feature_snapshot_json"))
+            reason_codes = json.loads(converted.pop("reason_codes_json"))
+            risk_flags = json.loads(converted.pop("risk_flags_json"))
+            latest_news = json.loads(converted.pop("latest_news_json"))
+            feature_snapshot = json.loads(converted.pop("feature_snapshot_json"))
+            converted["reason_codes"] = reason_codes
+            converted["risk_flags"] = risk_flags
+            converted["latest_news"] = latest_news
+            converted["feature_snapshot"] = feature_snapshot
             ranked_json_rows.append(converted)
+            ranked_csv_rows.append({
+                k: v for k, v in converted.items() if k not in {"latest_news", "feature_snapshot", "cik"}
+            } | {
+                "reason_codes": " | ".join(reason_codes),
+                "risk_flags": " | ".join(risk_flags),
+                "latest_news_titles": " | ".join(item.get("title", "") for item in latest_news[:3]),
+                "latest_news_publishers": " | ".join(item.get("publisher", "") for item in latest_news[:3]),
+            })
 
         write_json(run_dir / "scan_summary.json", scan_summary)
-        write_csv(run_dir / "ranked_candidates.csv", [{k: v for k, v in row.items() if not k.endswith("_json")} for row in ranked_rows])
+        write_csv(run_dir / "ranked_candidates.csv", ranked_csv_rows)
         write_json(run_dir / "ranked_candidates.json", ranked_json_rows)
         write_json(run_dir / "reasons_by_ticker.json", reasons_by_ticker)
         write_csv(run_dir / "raw_or_normalized_feature_snapshot.csv", feature_rows)
-        write_json(run_dir / "config_used.json", settings.to_dict())
+        write_json(run_dir / "config_used.json", sanitize_settings_payload(settings.to_dict()))
         write_text(run_dir / "scan_log.txt", "\n".join(log_lines + [f"[{utc_now_iso()}] Completed successfully"]))
         zip_path = run_dir / f"{run_id}_scan_pack.zip"
         zip_directory(run_dir, zip_path)
 
         ended_at = utc_now_iso()
-        upsert_run(
-            _build_run_record(
-                run_id,
-                settings,
-                "completed",
-                started_at,
-                message="Scan completed",
-                ended_at=ended_at,
-                progress_current=total,
-                progress_total=total,
-                phase="completed",
-                universe_size=len(universe_rows),
-                enrichment_size=len(enriched_universe_rows),
-                shortlist_size=len(shortlist_rows),
-                warnings=warnings,
-                artifacts_dir=str(run_dir),
-                artifact_zip_path=str(zip_path),
-                summary=scan_summary,
-            )
-        )
-        _update_status(
-            is_running=False,
-            run_id=run_id,
-            phase="completed",
-            message="Scan completed",
-            progress_current=total,
-            progress_total=total,
-        )
+        upsert_run(_build_run_record(run_id, settings, "completed", started_at, message="Scan completed", ended_at=ended_at, progress_current=total, progress_total=total, phase="completed", universe_size=len(universe_rows), enrichment_size=len(enriched_universe_rows), shortlist_size=len(shortlist_rows), warnings=warnings, artifacts_dir=str(run_dir), artifact_zip_path=str(zip_path), summary=scan_summary))
+        _update_status(is_running=False, run_id=run_id, phase="completed", message="Scan completed", progress_current=total, progress_total=total)
     except Exception as exc:
         log_lines.append(f"[{utc_now_iso()}] FAILED: {exc}")
         write_text(run_dir / "scan_log.txt", "\n".join(log_lines))
         ended_at = utc_now_iso()
-        upsert_run(
-            _build_run_record(
-                run_id,
-                settings,
-                "failed",
-                started_at,
-                message=str(exc),
-                ended_at=ended_at,
-                phase="failed",
-                warnings=warnings + [str(exc)],
-                artifacts_dir=str(run_dir),
-            )
-        )
-        _update_status(
-            is_running=False,
-            run_id=run_id,
-            phase="failed",
-            message=str(exc),
-            progress_current=0,
-            progress_total=0,
-        )
-
+        upsert_run(_build_run_record(run_id, settings, "failed", started_at, message=str(exc), ended_at=ended_at, phase="failed", warnings=warnings + [str(exc)], artifacts_dir=str(run_dir)))
+        _update_status(is_running=False, run_id=run_id, phase="failed", message=str(exc), progress_current=0, progress_total=0)
 
 
 def latest_run_with_candidates() -> Optional[Dict[str, Any]]:
@@ -384,5 +375,6 @@ def latest_run_with_candidates() -> Optional[Dict[str, Any]]:
         return None
     run = deserialize_run(runs[0])
     if run:
+        run = _sanitize_run_for_status(run)
         run["candidates"] = [deserialize_candidate(row) for row in list_candidates(run["run_id"])]
     return run

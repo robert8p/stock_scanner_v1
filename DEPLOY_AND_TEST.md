@@ -1,4 +1,4 @@
-# Deploy and Test — Stock Scanner V1
+# Deploy and Test — Stock Scanner V1.1
 
 ## Architecture
 
@@ -8,6 +8,7 @@
 - **Deployment target:** Render single web service
 - **Runtime model:** one worker, on-demand background scan thread, operator-visible progress polling
 - **Provider setup:** working `yfinance` path for live data plus `DEMO_MODE=true` synthetic mode for deployment smoke tests
+- **Universe reliability:** live Wikipedia scrape preferred, bundled S&P 500 CSV fallback included so the universe does not collapse when scraping fails
 
 ## Required environment variables
 
@@ -25,8 +26,8 @@ These are the exact variables the app understands. Only the first block is effec
 - `DEMO_MODE=false`
 
 ### Scan behaviour
-- `SCAN_TICKER_LIMIT=120`
-- `ENRICHMENT_LIMIT=60`
+- `SCAN_TICKER_LIMIT=500`
+- `ENRICHMENT_LIMIT=120`
 - `SHORTLIST_SIZE=20`
 - `LOOKBACK_DAYS=320`
 - `NEWS_LOOKBACK_DAYS=7`
@@ -70,7 +71,7 @@ If you want to prove the app plumbing before hitting live market/news endpoints:
 
 After that, set `DEMO_MODE=false` and redeploy for a live-data test.
 
-## Live-data V1 test steps
+## Live-data V1.1 test steps
 
 1. Open `/scanner`
 2. Click **Run Scan**
@@ -81,6 +82,10 @@ After that, set `DEMO_MODE=false` and redeploy for a live-data test.
 7. Download the latest scan pack ZIP
 8. Open `/health`
 9. Open `/api/status`
+10. Confirm in the downloaded scan pack that:
+   - `config_used.json` shows redacted secrets only
+   - `ranked_candidates.csv` includes reason codes, risk flags, and top news titles
+   - `scan_summary.json` shows a materially broader universe than the earlier 50-name fallback run
 
 ## What to upload back after testing
 
@@ -93,18 +98,20 @@ Please upload back exactly these items:
 5. The `/api/status` JSON output
 6. Any visible error message or confusing behaviour you notice
 
-## What V1 proves
+## What V1.1 proves
 
 - the app can run a transparent, explainable ranking scan
 - scores are decomposed into structural, catalyst, and timing components
 - per-run artifacts exist and are downloadable
 - operator status is surfaced clearly
+- the universe is resilient to live scraping failures
+- secrets are no longer written into artifacts/status payloads
 
-## What V1 does **not** prove
+## What V1.1 does **not** prove
 
 - calibrated probability quality
 - that the score ranking has historical edge
 - that the current scoring logic beats naive alternatives out of sample
 - live scheduling / drift handling / alerts
 
-Those belong to Version 2 and Version 3.
+Those still belong to Version 2 and Version 3.

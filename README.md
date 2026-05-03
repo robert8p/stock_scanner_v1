@@ -1,4 +1,4 @@
-# News + Fundamentals + Technicals Stock Scanner — Version 1
+# News + Fundamentals + Technicals Stock Scanner — Version 1.1
 
 This is a single-service FastAPI app for scanning a liquid US stock universe, ranking candidates by a transparent **Opportunity Score**, and packaging each run into a downloadable artifact bundle.
 
@@ -37,3 +37,13 @@ DEMO_MODE=true
 ```
 
 Then run one scan. The app will generate deterministic synthetic data so the full UI and artifact flow can be tested end to end.
+
+
+## V1.1 hardening highlights
+
+- bundled S&P 500 fallback CSV so the universe still loads when Wikipedia scraping fails
+- secrets redacted from artifacts and persisted run metadata
+- stricter ticker-relevance filtering for news
+- share-class dedupe for duplicate economic exposures such as GOOG/GOOGL
+- richer ranked CSV outputs for operator review
+- sector alias normalization so sector-relative strength fills more reliably

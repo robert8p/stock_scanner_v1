@@ -13,6 +13,7 @@ class NewsItem:
     link: str = ""
     published_at: str = ""
     summary: str = ""
+    related_tickers: List[str] = field(default_factory=list)
 
 
 @dataclass

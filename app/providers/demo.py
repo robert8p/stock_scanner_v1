@@ -64,6 +64,7 @@ class DemoProvider(BaseDataProvider):
                     link="https://example.com/demo-news",
                     published_at=published.isoformat(),
                     summary=f"Synthetic headline for {ticker} used when DEMO_MODE=true.",
+                    related_tickers=[ticker],
                 )
             )
         fundamentals = {

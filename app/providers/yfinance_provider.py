@@ -77,6 +77,9 @@ class YFinanceProvider(BaseDataProvider):
                 publisher = item.get("publisher") or item.get("content", {}).get("provider", {}).get("displayName", "")
                 link = item.get("link") or item.get("content", {}).get("canonicalUrl", {}).get("url", "")
                 summary = item.get("summary") or item.get("content", {}).get("summary", "") or ""
+                related_tickers = item.get("relatedTickers") or item.get("content", {}).get("finance", {}).get("stockTickers") or []
+                if isinstance(related_tickers, str):
+                    related_tickers = [related_tickers]
                 published_at_raw = item.get("providerPublishTime") or item.get("content", {}).get("pubDate")
                 published_at = ""
                 if isinstance(published_at_raw, (int, float)):
@@ -102,6 +105,7 @@ class YFinanceProvider(BaseDataProvider):
                         link=link,
                         published_at=published_at,
                         summary=summary,
+                        related_tickers=[str(t).upper() for t in related_tickers if t],
                     )
                 )
         except Exception as exc:

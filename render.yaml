@@ -31,9 +31,9 @@ services:
       - key: DEMO_MODE
         value: false
       - key: SCAN_TICKER_LIMIT
-        value: 120
+        value: 500
       - key: ENRICHMENT_LIMIT
-        value: 60
+        value: 120
       - key: SHORTLIST_SIZE
         value: 20
       - key: LOOKBACK_DAYS

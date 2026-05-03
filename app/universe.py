@@ -6,67 +6,32 @@ from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
-import requests
 
 from .config import load_settings
 from .storage import utc_now_iso
 
 
 UNIVERSE_CACHE_TTL_DAYS = 7
+LOCAL_BUNDLED_UNIVERSE_PATH = Path(__file__).resolve().parent / "data" / "sp500_constituents.csv"
 
 
-LOCAL_FALLBACK_UNIVERSE = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Information Technology"},
-    {"symbol": "MSFT", "name": "Microsoft Corp.", "sector": "Information Technology"},
-    {"symbol": "NVDA", "name": "NVIDIA Corp.", "sector": "Information Technology"},
-    {"symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Discretionary"},
-    {"symbol": "META", "name": "Meta Platforms Inc.", "sector": "Communication Services"},
-    {"symbol": "GOOGL", "name": "Alphabet Inc. Class A", "sector": "Communication Services"},
-    {"symbol": "GOOG", "name": "Alphabet Inc. Class C", "sector": "Communication Services"},
-    {"symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Discretionary"},
-    {"symbol": "BRK.B", "name": "Berkshire Hathaway Class B", "sector": "Financials"},
-    {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "sector": "Financials"},
-    {"symbol": "V", "name": "Visa Inc.", "sector": "Financials"},
-    {"symbol": "MA", "name": "Mastercard Inc.", "sector": "Financials"},
-    {"symbol": "LLY", "name": "Eli Lilly and Company", "sector": "Health Care"},
-    {"symbol": "UNH", "name": "UnitedHealth Group Inc.", "sector": "Health Care"},
-    {"symbol": "XOM", "name": "Exxon Mobil Corp.", "sector": "Energy"},
-    {"symbol": "COST", "name": "Costco Wholesale Corp.", "sector": "Consumer Staples"},
-    {"symbol": "WMT", "name": "Walmart Inc.", "sector": "Consumer Staples"},
-    {"symbol": "HD", "name": "Home Depot Inc.", "sector": "Consumer Discretionary"},
-    {"symbol": "PG", "name": "Procter & Gamble Co.", "sector": "Consumer Staples"},
-    {"symbol": "JNJ", "name": "Johnson & Johnson", "sector": "Health Care"},
-    {"symbol": "ABBV", "name": "AbbVie Inc.", "sector": "Health Care"},
-    {"symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Information Technology"},
-    {"symbol": "CRM", "name": "Salesforce Inc.", "sector": "Information Technology"},
-    {"symbol": "ORCL", "name": "Oracle Corp.", "sector": "Information Technology"},
-    {"symbol": "AMD", "name": "Advanced Micro Devices Inc.", "sector": "Information Technology"},
-    {"symbol": "ADBE", "name": "Adobe Inc.", "sector": "Information Technology"},
-    {"symbol": "NFLX", "name": "Netflix Inc.", "sector": "Communication Services"},
-    {"symbol": "KO", "name": "Coca-Cola Co.", "sector": "Consumer Staples"},
-    {"symbol": "PEP", "name": "PepsiCo Inc.", "sector": "Consumer Staples"},
-    {"symbol": "MRK", "name": "Merck & Co., Inc.", "sector": "Health Care"},
-    {"symbol": "BAC", "name": "Bank of America Corp.", "sector": "Financials"},
-    {"symbol": "MCD", "name": "McDonald's Corp.", "sector": "Consumer Discretionary"},
-    {"symbol": "CVX", "name": "Chevron Corp.", "sector": "Energy"},
-    {"symbol": "GE", "name": "GE Aerospace", "sector": "Industrials"},
-    {"symbol": "CAT", "name": "Caterpillar Inc.", "sector": "Industrials"},
-    {"symbol": "HON", "name": "Honeywell International Inc.", "sector": "Industrials"},
-    {"symbol": "LIN", "name": "Linde plc", "sector": "Materials"},
-    {"symbol": "LOW", "name": "Lowe's Companies, Inc.", "sector": "Consumer Discretionary"},
-    {"symbol": "DIS", "name": "Walt Disney Co.", "sector": "Communication Services"},
-    {"symbol": "INTC", "name": "Intel Corp.", "sector": "Information Technology"},
-    {"symbol": "QCOM", "name": "QUALCOMM Incorporated", "sector": "Information Technology"},
-    {"symbol": "TXN", "name": "Texas Instruments Incorporated", "sector": "Information Technology"},
-    {"symbol": "AMGN", "name": "Amgen Inc.", "sector": "Health Care"},
-    {"symbol": "BKNG", "name": "Booking Holdings Inc.", "sector": "Consumer Discretionary"},
-    {"symbol": "SBUX", "name": "Starbucks Corp.", "sector": "Consumer Discretionary"},
-    {"symbol": "GS", "name": "Goldman Sachs Group Inc.", "sector": "Financials"},
-    {"symbol": "SPGI", "name": "S&P Global Inc.", "sector": "Financials"},
-    {"symbol": "NOW", "name": "ServiceNow Inc.", "sector": "Information Technology"},
-    {"symbol": "PLD", "name": "Prologis Inc.", "sector": "Real Estate"},
-    {"symbol": "NEE", "name": "NextEra Energy Inc.", "sector": "Utilities"},
-]
+def _shape_rows(df: pd.DataFrame) -> List[Dict[str, str]]:
+    rename_map = {
+        "Symbol": "symbol",
+        "Security": "name",
+        "GICS Sector": "sector",
+        "GICS Sub-Industry": "industry",
+        "CIK": "cik",
+        "Date added": "date_added",
+        "Founded": "founded",
+        "Headquarters Location": "headquarters",
+    }
+    frame = df.rename(columns=rename_map).copy()
+    for column in ["symbol", "name", "sector", "industry", "cik", "date_added", "founded", "headquarters"]:
+        if column not in frame.columns:
+            frame[column] = ""
+    frame["symbol"] = frame["symbol"].astype(str).str.replace(".", "-", regex=False).str.upper()
+    return frame[["symbol", "name", "sector", "industry", "cik", "date_added", "founded", "headquarters"]].fillna("").to_dict(orient="records")
 
 
 def load_universe() -> List[Dict[str, str]]:
@@ -88,7 +53,6 @@ def load_universe() -> List[Dict[str, str]]:
                 except Exception:
                     cache_fresh = False
             else:
-                # Legacy cache with no timestamp — treat as stale and try to refresh
                 cache_fresh = False
             if cached_rows and cache_fresh:
                 return cached_rows
@@ -98,15 +62,20 @@ def load_universe() -> List[Dict[str, str]]:
     try:
         tables = pd.read_html(settings.wikipedia_universe_url)
         if tables:
-            df = tables[0].rename(columns={"Symbol": "symbol", "Security": "name", "GICS Sector": "sector"})
-            df["symbol"] = df["symbol"].astype(str).str.replace(".", "-", regex=False)
-            rows = df[["symbol", "name", "sector"]].to_dict(orient="records")
-            cache_path.write_text(json.dumps({"fetched_at": utc_now_iso(), "rows": rows}, indent=2))
+            rows = _shape_rows(tables[0])
+            cache_path.write_text(json.dumps({"fetched_at": utc_now_iso(), "rows": rows, "source": "wikipedia"}, indent=2))
             return rows
     except Exception:
         pass
 
-    # Refresh failed — prefer stale cached rows over the small hardcoded fallback
+    if LOCAL_BUNDLED_UNIVERSE_PATH.exists():
+        try:
+            rows = _shape_rows(pd.read_csv(LOCAL_BUNDLED_UNIVERSE_PATH))
+            cache_path.write_text(json.dumps({"fetched_at": utc_now_iso(), "rows": rows, "source": "bundled_csv"}, indent=2))
+            return rows
+        except Exception:
+            pass
+
     if cached_rows:
         return cached_rows
-    return LOCAL_FALLBACK_UNIVERSE
+    return []

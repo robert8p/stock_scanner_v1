@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from .config import load_settings, persist_settings
 from .db import deserialize_candidate, deserialize_run, get_candidate, get_latest_run, get_run, init_db, list_candidates, list_runs
-from .scanner import ScanAlreadyRunningError, ScanCooldownError, get_runtime_status, latest_run_with_candidates, run_scan_now
+from .scanner import ScanAlreadyRunningError, ScanCooldownError, get_runtime_status, latest_run_with_candidates, run_scan_now, sanitize_settings_payload
 from .universe import load_universe
 
 settings = load_settings()
@@ -40,6 +40,7 @@ def health() -> Dict[str, Any]:
         "data_dir": current_settings.data_dir,
         "database_path": current_settings.database_path,
         "artifacts_dir": current_settings.artifacts_dir,
+        "settings": sanitize_settings_payload(current_settings.to_dict()),
         "latest_run": latest,
     }
 
@@ -212,7 +213,7 @@ def download_artifact(run_id: str, filename: str):
 @app.get("/api/settings")
 def api_settings():
     current = load_settings()
-    return current.to_dict()
+    return sanitize_settings_payload(current.to_dict())
 
 
 @app.post("/api/settings/update")
