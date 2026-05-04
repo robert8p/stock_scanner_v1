@@ -7,6 +7,7 @@ from typing import Dict, List
 import pandas as pd
 import yfinance as yf
 
+from ..config import load_settings
 from .base import BaseDataProvider, NewsItem, TickerDataBundle
 
 
@@ -16,10 +17,9 @@ class YFinanceProvider(BaseDataProvider):
     def __init__(self, max_workers: int = 8):
         self.max_workers = max_workers
 
-    def fetch_bulk_price_history(self, tickers: List[str], lookback_days: int) -> Dict[str, pd.DataFrame]:
+    def _download_batch(self, tickers: List[str], period_days: int) -> Dict[str, pd.DataFrame]:
         if not tickers:
             return {}
-        period_days = max(lookback_days, 260)
         try:
             data = yf.download(
                 tickers=tickers,
@@ -28,15 +28,16 @@ class YFinanceProvider(BaseDataProvider):
                 auto_adjust=False,
                 progress=False,
                 group_by="ticker",
-                threads=True,
+                threads=False,
             )
         except Exception:
             return {}
 
         result: Dict[str, pd.DataFrame] = {}
         if isinstance(data.columns, pd.MultiIndex):
+            available = set(data.columns.get_level_values(0))
             for ticker in tickers:
-                if ticker not in data.columns.get_level_values(0):
+                if ticker not in available:
                     continue
                 frame = data[ticker].dropna(how="all")
                 if not frame.empty:
@@ -45,6 +46,25 @@ class YFinanceProvider(BaseDataProvider):
             frame = data.dropna(how="all")
             if not frame.empty and tickers:
                 result[tickers[0]] = frame
+        return result
+
+    def fetch_bulk_price_history(self, tickers: List[str], lookback_days: int) -> Dict[str, pd.DataFrame]:
+        if not tickers:
+            return {}
+        period_days = max(lookback_days, 260)
+        settings = load_settings()
+        chunk_size = max(25, settings.yfinance_bulk_chunk_size)
+        result: Dict[str, pd.DataFrame] = {}
+        unique_tickers = []
+        seen = set()
+        for ticker in tickers:
+            if ticker not in seen:
+                unique_tickers.append(ticker)
+                seen.add(ticker)
+        batches = [unique_tickers[i : i + chunk_size] for i in range(0, len(unique_tickers), chunk_size)]
+        for batch in batches:
+            batch_result = self._download_batch(batch, period_days)
+            result.update(batch_result)
         return result
 
     def fetch_ticker_bundle(self, ticker: str, lookback_days: int, news_lookback_days: int) -> TickerDataBundle:
@@ -96,7 +116,6 @@ class YFinanceProvider(BaseDataProvider):
                             continue
                         published_at = parsed.isoformat()
                     except Exception:
-                        # Could not parse — keep raw string but apply no cutoff
                         published_at = published_at_raw
                 news_items.append(
                     NewsItem(

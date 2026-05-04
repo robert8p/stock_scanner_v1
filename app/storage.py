@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,20 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
+def _sanitize_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    return value
+
+
+def sanitize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: _sanitize_value(value) for key, value in row.items()}
+
+
 def write_json(path: str | Path, payload: Any) -> None:
     Path(path).write_text(json.dumps(payload, indent=2, default=str))
 
@@ -28,7 +43,9 @@ def write_text(path: str | Path, text: str) -> None:
 
 
 def write_csv(path: str | Path, rows: List[Dict[str, Any]]) -> None:
-    df = pd.DataFrame(rows)
+    sanitized_rows = [sanitize_row(row) for row in rows]
+    df = pd.DataFrame(sanitized_rows)
+    df = df.where(pd.notnull(df), None)
     df.to_csv(path, index=False)
 
 

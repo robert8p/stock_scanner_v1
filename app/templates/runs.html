@@ -27,6 +27,7 @@
           <td>
             {% if run.artifact_zip_path %}<a href="/download/run/{{ run.run_id }}/scan-pack">Scan pack</a>{% endif %}
             {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/run/{{ run.run_id }}/scan_summary.json">Summary</a>{% endif %}
+            {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/run/{{ run.run_id }}/coverage_diagnostics.json">Coverage</a>{% endif %}
             {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/run/{{ run.run_id }}/scan_log.txt">Log</a>{% endif %}
           </td>
         </tr>

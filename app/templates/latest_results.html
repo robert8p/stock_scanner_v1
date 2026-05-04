@@ -9,9 +9,22 @@
       {% endif %}
     </div>
     {% if latest %}
-    <a class="primary-btn" href="/download/run/{{ latest.run_id }}/scan-pack">Download scan pack</a>
+    <div>
+      <a class="primary-btn" href="/download/run/{{ latest.run_id }}/scan-pack">Download scan pack</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/coverage_diagnostics.json">Coverage diagnostics</a>
+    </div>
     {% endif %}
   </div>
+  {% if latest and latest.summary %}
+  <div class="metric-grid">
+    <div class="metric-card"><span>Universe available</span><strong>{{ latest.summary.universe_available or latest.summary.universe_size_loaded }}</strong></div>
+    <div class="metric-card"><span>Loaded</span><strong>{{ latest.summary.universe_size_loaded }}</strong></div>
+    <div class="metric-card"><span>Price history</span><strong>{{ latest.summary.price_history_available_count or 'n/a' }}</strong></div>
+    <div class="metric-card"><span>Enriched</span><strong>{{ latest.summary.enrichment_size }}</strong></div>
+    <div class="metric-card"><span>Ranked</span><strong>{{ latest.summary.deduped_candidate_count }}</strong></div>
+    <div class="metric-card"><span>Shortlist</span><strong>{{ latest.summary.shortlist_size }}</strong></div>
+  </div>
+  {% endif %}
   {% if latest and latest.candidates %}
   <div class="table-wrap">
     <table>

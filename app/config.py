@@ -45,6 +45,7 @@ class AppSettings:
 
     yfinance_timeout_seconds: int = int(os.getenv("YFINANCE_TIMEOUT_SECONDS", "20"))
     requests_timeout_seconds: int = int(os.getenv("REQUESTS_TIMEOUT_SECONDS", "20"))
+    yfinance_bulk_chunk_size: int = int(os.getenv("YFINANCE_BULK_CHUNK_SIZE", "100"))
 
     wikipedia_universe_url: str = os.getenv(
         "WIKIPEDIA_UNIVERSE_URL",
@@ -133,10 +134,24 @@ def _coerce_setting_value(key: str, value: Any) -> Any:
     return value
 
 
+
+
+def _apply_v12_recommended_defaults(settings: AppSettings, raw_data: Dict[str, Any]) -> None:
+    updated_from_ui = bool(raw_data.get("updated_from_ui"))
+    if updated_from_ui:
+        return
+    if settings.default_universe_name == "S&P 500":
+        if settings.scan_ticker_limit == 120:
+            settings.scan_ticker_limit = 500
+        if settings.enrichment_limit == 60:
+            settings.enrichment_limit = 120
+
+
 def load_settings() -> AppSettings:
     settings = AppSettings()
     settings.ensure_paths()
     path = Path(settings.settings_path)
+    data: Dict[str, Any] = {}
     if path.exists():
         try:
             data = json.loads(path.read_text())
@@ -147,6 +162,7 @@ def load_settings() -> AppSettings:
                 setattr(settings, key, _coerce_setting_value(key, value))
             else:
                 settings.extra[key] = value
+    _apply_v12_recommended_defaults(settings, data)
     return settings
 
 

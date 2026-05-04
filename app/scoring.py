@@ -48,7 +48,9 @@ HIGH_CREDIBILITY_PUBLISHERS = {"Reuters", "Bloomberg", "The Wall Street Journal"
 GENERIC_MARKET_PATTERNS = {
     "stocks to watch", "wall street", "stock market today", "market open", "market close",
     "futures rise", "futures fall", "s&p 500", "dow jones", "nasdaq", "magnificent 7",
+    "top stocks", "best stocks", "stocks to buy", "investor attention", "what you should know",
 }
+LOW_SIGNAL_PUBLISHERS = {"Zacks", "Simply Wall St.", "Insider Monkey", "GuruFocus.com", "Benzinga"}
 COMPANY_STOPWORDS = {"inc", "corp", "corporation", "company", "co", "holdings", "group", "class", "plc", "ltd", "the"}
 
 
@@ -341,34 +343,64 @@ def _company_tokens(company_name: str) -> List[str]:
     return [t for t in tokens if t not in COMPANY_STOPWORDS]
 
 
-def _news_relevance(item: NewsItem, ticker: str, company_name: str) -> float:
+def _mentions_ticker(text: str, ticker: str) -> bool:
+    return bool(ticker and re.search(rf"\b{re.escape(ticker.lower())}\b", text))
+
+
+def _mentions_company(company_name: str, text: str) -> int:
+    tokens = [token for token in _company_tokens(company_name) if len(token) >= 4]
+    return sum(1 for token in tokens if token in text)
+
+
+def _news_relevance(item: NewsItem, ticker: str, company_name: str) -> tuple[float, Dict[str, Any]]:
     title = (item.title or "").lower()
     summary = (item.summary or "").lower()
     text = f"{title} {summary}"
     related = {str(t).upper() for t in (item.related_tickers or []) if t}
+    ticker_in_title_or_summary = _mentions_ticker(text, ticker)
+    company_hits = _mentions_company(company_name, text)
+    related_match = ticker.upper() in related
+    generic_pattern = any(pattern in text for pattern in GENERIC_MARKET_PATTERNS)
+    multi_ticker_noise = len(related) >= 4
+
     relevance = 0.0
-    if ticker.upper() in related:
-        relevance += 1.0
-    if re.search(rf"\b{re.escape(ticker.lower())}\b", text):
-        relevance += 0.9
-    company_hits = sum(1 for token in _company_tokens(company_name) if token in text)
+    if ticker_in_title_or_summary:
+        relevance += 1.2
     if company_hits >= 2:
-        relevance += 0.8
+        relevance += 1.0
     elif company_hits == 1:
+        relevance += 0.6
+    if related_match:
         relevance += 0.4
-    if any(pattern in text for pattern in GENERIC_MARKET_PATTERNS):
-        relevance -= 0.6
-    return relevance
+    if generic_pattern:
+        relevance -= 0.9
+    if multi_ticker_noise:
+        relevance -= 0.4
+    if not ticker_in_title_or_summary and company_hits == 0 and not related_match:
+        relevance -= 1.0
+
+    signals = {
+        "ticker_in_text": ticker_in_title_or_summary,
+        "company_hits": company_hits,
+        "related_match": related_match,
+        "generic_pattern": generic_pattern,
+        "multi_ticker_noise": multi_ticker_noise,
+    }
+    return relevance, signals
 
 
 def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: str = "") -> Tuple[float, List[str], List[str], Dict[str, Any], List[Dict[str, Any]]]:
+    empty_metrics = {
+        "headline_count": 0,
+        "ticker_relevant_headline_count": 0,
+        "positive_hits": 0,
+        "negative_hits": 0,
+        "filtered_generic_count": 0,
+        "filtered_irrelevant_count": 0,
+        "high_credibility_relevant_count": 0,
+    }
     if not news_items:
-        return 42.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], {
-            "headline_count": 0,
-            "ticker_relevant_headline_count": 0,
-            "positive_hits": 0,
-            "negative_hits": 0,
-        }, []
+        return 42.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], empty_metrics, []
 
     now = datetime.now(timezone.utc)
     score = 46.0
@@ -376,27 +408,40 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
     risks: List[str] = []
     positive_hits = 0
     negative_hits = 0
+    filtered_generic_count = 0
+    filtered_irrelevant_count = 0
+    high_credibility_relevant_count = 0
     prepared_news: List[Dict[str, Any]] = []
     seen_titles = set()
     relevant_count = 0
 
-    for item in news_items[:12]:
+    for item in news_items[:15]:
         normalized_title = (item.title or "").strip().lower()
         if not normalized_title or normalized_title in seen_titles:
             continue
         seen_titles.add(normalized_title)
 
-        relevance = _news_relevance(item, ticker, company_name)
-        if relevance < 0.5:
+        relevance, signals = _news_relevance(item, ticker, company_name)
+        if signals["generic_pattern"]:
+            filtered_generic_count += 1
+        if relevance < 0.75 or (signals["generic_pattern"] and not signals["ticker_in_text"] and signals["company_hits"] == 0):
+            filtered_irrelevant_count += 1
             continue
-        relevant_count += 1
 
         text = f"{item.title} {item.summary}".lower()
         pos_count = sum(1 for word in POSITIVE_NEWS_WORDS if word in text)
         neg_count = sum(1 for word in NEGATIVE_NEWS_WORDS if word in text)
         positive_hits += pos_count
         negative_hits += neg_count
-        credibility = 1.0 if item.publisher in HIGH_CREDIBILITY_PUBLISHERS else 0.8
+
+        if item.publisher in HIGH_CREDIBILITY_PUBLISHERS:
+            credibility = 1.05
+            high_credibility_relevant_count += 1
+        elif item.publisher in LOW_SIGNAL_PUBLISHERS:
+            credibility = 0.55
+        else:
+            credibility = 0.75
+
         recency_weight = 0.7
         if item.published_at:
             try:
@@ -407,8 +452,12 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
                 recency_weight = 1.0 if hours_old <= 24 else 0.85 if hours_old <= 72 else 0.65
             except Exception:
                 pass
-        delta = (pos_count - neg_count) * 4.5 * credibility * recency_weight * min(relevance, 1.5)
+
+        sentiment_signal = (pos_count - neg_count) * 4.2
+        mention_bonus = 1.25 if signals["ticker_in_text"] or signals["company_hits"] >= 1 else 0.85
+        delta = sentiment_signal * credibility * recency_weight * min(max(relevance, 0.75), 1.8) * mention_bonus
         score += delta
+        relevant_count += 1
         prepared_news.append({
             "title": item.title,
             "publisher": item.publisher,
@@ -418,24 +467,25 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
             "sentiment_delta": round(delta, 2),
             "relevance": round(relevance, 2),
             "related_tickers": list(item.related_tickers or []),
+            "high_credibility": item.publisher in HIGH_CREDIBILITY_PUBLISHERS,
         })
 
     if relevant_count == 0:
-        return 42.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], {
-            "headline_count": len(news_items),
-            "ticker_relevant_headline_count": 0,
-            "positive_hits": 0,
-            "negative_hits": 0,
-        }, []
+        metrics = {**empty_metrics, "headline_count": len(news_items), "filtered_generic_count": filtered_generic_count, "filtered_irrelevant_count": filtered_irrelevant_count}
+        return 42.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], metrics, []
 
     if positive_hits > negative_hits:
         reasons.append("Ticker-specific recent news flow skewing positive")
     if positive_hits >= 2:
         reasons.append("Multiple positive catalyst terms in relevant headlines")
+    if high_credibility_relevant_count >= 1:
+        reasons.append("At least one higher-credibility relevant headline present")
     if negative_hits > positive_hits:
         risks.append("Ticker-specific recent news flow skewing negative")
     if negative_hits >= 2:
         risks.append("Negative catalyst terms present in relevant headlines")
+    if high_credibility_relevant_count == 0:
+        risks.append("Relevant catalyst coverage is mostly lower-credibility")
 
     score = round(clamp(score), 2)
     metrics = {
@@ -443,7 +493,11 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         "ticker_relevant_headline_count": relevant_count,
         "positive_hits": positive_hits,
         "negative_hits": negative_hits,
+        "filtered_generic_count": filtered_generic_count,
+        "filtered_irrelevant_count": filtered_irrelevant_count,
+        "high_credibility_relevant_count": high_credibility_relevant_count,
     }
+    prepared_news = sorted(prepared_news, key=lambda item: (item.get("high_credibility", False), item.get("relevance", 0), item.get("sentiment_delta", 0)), reverse=True)
     return score, reasons[:5], risks[:5], metrics, prepared_news[:5]
 
 

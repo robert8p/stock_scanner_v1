@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import threading
 import time
@@ -16,7 +17,7 @@ from .db import deserialize_candidate, deserialize_run, list_candidates, list_ru
 from .providers import get_provider
 from .providers.base import TickerDataBundle
 from .scoring import SECTOR_ETF_MAP, compute_timing_metrics, confidence_band, normalize_sector_name, score_catalyst, score_structural, score_timing
-from .storage import ensure_dir, utc_now_iso, write_csv, write_json, write_text, zip_directory
+from .storage import ensure_dir, sanitize_row, utc_now_iso, write_csv, write_json, write_text, zip_directory
 from .universe import load_universe
 
 
@@ -85,15 +86,20 @@ def _update_status(**kwargs: Any) -> None:
     _persist_runtime_status(status)
 
 
-def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List[Dict[str, str]], settings) -> List[Dict[str, str]]:
+def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List[Dict[str, str]], settings) -> tuple[List[Dict[str, str]], Dict[str, Any]]:
     benchmark_spy = history_map.get("SPY")
     benchmark_set = {"SPY"} | set(SECTOR_ETF_MAP.values())
     scored = []
     universe_by_ticker = {row["symbol"]: row for row in universe_rows}
-    for ticker, frame in history_map.items():
+    missing_history = []
+    for ticker, row in universe_by_ticker.items():
         if ticker in benchmark_set:
             continue
-        sector = normalize_sector_name(universe_by_ticker.get(ticker, {}).get("sector", ""))
+        frame = history_map.get(ticker)
+        if frame is None or frame.empty:
+            missing_history.append(ticker)
+            continue
+        sector = normalize_sector_name(row.get("sector", ""))
         sector_etf = SECTOR_ETF_MAP.get(sector)
         sector_history = history_map.get(sector_etf) if sector_etf else None
         metrics = compute_timing_metrics(frame, benchmark_spy, sector_history)
@@ -101,7 +107,14 @@ def _initial_prefilter(history_map: Dict[str, pd.DataFrame], universe_rows: List
         scored.append({"ticker": ticker, "score": score})
     ranked = sorted(scored, key=lambda x: x["score"], reverse=True)
     keep = {row["ticker"] for row in ranked[: settings.enrichment_limit]}
-    return [row for row in universe_rows if row["symbol"] in keep]
+    diagnostics = {
+        "price_history_available_count": len(scored),
+        "price_history_missing_count": len(missing_history),
+        "prefilter_ranked_count": len(ranked),
+        "prefilter_keep_count": len(keep),
+        "missing_price_history_examples": missing_history[:10],
+    }
+    return [row for row in universe_rows if row["symbol"] in keep], diagnostics
 
 
 def _normalize_ticker(symbol: str) -> str:
@@ -115,7 +128,7 @@ def _company_dedupe_key(row: Dict[str, Any]) -> str:
     company_name = (row.get("company_name") or "").lower()
     company_name = re.sub(r"\(class [^)]+\)", "", company_name)
     company_name = re.sub(r"[^a-z0-9]+", " ", company_name)
-    company_name = re.sub(r"(inc|corp|corporation|company|co|holdings|group|plc|class)", "", company_name)
+    company_name = re.sub(r"\b(inc|corp|corporation|company|co|holdings|group|plc|class)\b", "", company_name)
     company_name = re.sub(r"\s+", " ", company_name).strip()
     return f"name:{company_name}" if company_name else f"ticker:{row.get('ticker','')}"
 
@@ -159,6 +172,26 @@ def _build_run_record(run_id: str, settings, status: str, started_at: str, messa
     return record
 
 
+def _coverage_counts(feature_rows: List[Dict[str, Any]], columns: List[str]) -> Dict[str, Any]:
+    total = len(feature_rows)
+    payload: Dict[str, Any] = {}
+    for column in columns:
+        present = 0
+        for row in feature_rows:
+            value = row.get(column)
+            if value is None or value == "":
+                continue
+            if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                continue
+            present += 1
+        payload[column] = {
+            "present_count": present,
+            "missing_count": max(total - present, 0),
+            "coverage_pct": round((present / total) * 100, 1) if total else 0.0,
+        }
+    return payload
+
+
 def run_scan_now() -> str:
     global LAST_SCAN_STARTED_AT
     settings = load_settings()
@@ -191,11 +224,14 @@ def _run_scan_thread(run_id: str) -> None:
 
     try:
         _update_status(phase="loading_universe", message="Loading universe", progress_current=0, progress_total=1)
-        universe_rows = load_universe()
-        universe_rows = [{**row, "symbol": _normalize_ticker(row["symbol"]), "sector": normalize_sector_name(row.get("sector", ""))} for row in universe_rows if row.get("symbol")]
-        if not universe_rows:
+        all_universe_rows = load_universe()
+        all_universe_rows = [{**row, "symbol": _normalize_ticker(row["symbol"]), "sector": normalize_sector_name(row.get("sector", ""))} for row in all_universe_rows if row.get("symbol")]
+        if not all_universe_rows:
             raise RuntimeError("Universe loading failed; no symbols available.")
-        universe_rows = universe_rows[: settings.scan_ticker_limit]
+        universe_rows = all_universe_rows[: settings.scan_ticker_limit]
+        if settings.scan_ticker_limit < len(all_universe_rows):
+            warnings.append(f"Configured scan_ticker_limit {settings.scan_ticker_limit} is narrower than available universe size {len(all_universe_rows)}.")
+        log_lines.append(f"Universe rows available: {len(all_universe_rows)}")
         log_lines.append(f"Universe rows loaded: {len(universe_rows)}")
 
         benchmark_tickers = ["SPY"]
@@ -210,7 +246,7 @@ def _run_scan_thread(run_id: str) -> None:
         history_map = provider.fetch_bulk_price_history(bulk_tickers, settings.lookback_days)
         log_lines.append(f"Bulk price histories fetched: {len(history_map)}")
 
-        enriched_universe_rows = _initial_prefilter(history_map, universe_rows, settings)
+        enriched_universe_rows, prefilter_diagnostics = _initial_prefilter(history_map, universe_rows, settings)
         log_lines.append(f"Prefilter kept {len(enriched_universe_rows)} tickers for full enrichment")
         if not enriched_universe_rows:
             enriched_universe_rows = universe_rows[: min(len(universe_rows), settings.enrichment_limit)]
@@ -219,7 +255,7 @@ def _run_scan_thread(run_id: str) -> None:
         candidate_rows: List[Dict[str, Any]] = []
         feature_rows: List[Dict[str, Any]] = []
         total = len(enriched_universe_rows)
-        _update_status(phase="enriching_tickers", message="Fetching fundamentals and news", progress_current=0, progress_total=max(total,1))
+        _update_status(phase="enriching_tickers", message="Fetching fundamentals and news", progress_current=0, progress_total=max(total, 1))
 
         benchmark_spy = history_map.get("SPY")
         bundles: Dict[str, TickerDataBundle] = {}
@@ -250,7 +286,7 @@ def _run_scan_thread(run_id: str) -> None:
             catalyst_score, catalyst_reasons, catalyst_risks, catalyst_metrics, prepared_news = score_catalyst(bundle.news, ticker=ticker, company_name=bundle.company_name)
 
             combined_reasons = list(dict.fromkeys(structural_reasons + catalyst_reasons + timing_reasons))
-            combined_risks = list(dict.fromkeys(bundle.warnings + structural_risks + catalyst_risks + timing_risks))
+            combined_risks = [item for item in dict.fromkeys(bundle.warnings + structural_risks + catalyst_risks + timing_risks) if item]
             overall_score = round(structural_score * settings.structural_weight + catalyst_score * settings.catalyst_weight + timing_score * settings.timing_weight, 2)
             candidate_rows.append({
                 "run_id": run_id,
@@ -272,7 +308,7 @@ def _run_scan_thread(run_id: str) -> None:
                 "fundamental_summary": fundamental_summary,
                 "feature_snapshot_json": json.dumps({"timing": timing_metrics, "fundamentals": bundle.fundamentals, "catalyst": catalyst_metrics}, default=str),
             })
-            feature_rows.append({
+            feature_rows.append(sanitize_row({
                 "ticker": ticker,
                 "company_name": bundle.company_name,
                 "sector": bundle.sector,
@@ -283,10 +319,10 @@ def _run_scan_thread(run_id: str) -> None:
                 **{f"timing_{k}": v for k, v in timing_metrics.items() if k != "warnings"},
                 **{f"fund_{k}": v for k, v in (bundle.fundamentals or {}).items()},
                 **{f"catalyst_{k}": v for k, v in catalyst_metrics.items()},
-                "risk_flags": " | ".join(combined_risks[:6]),
-                "reason_codes": " | ".join(combined_reasons[:6]),
-                "latest_news_titles": " | ".join(item.get("title", "") for item in prepared_news[:3]),
-            })
+                "risk_flags": " | ".join(combined_risks[:6]) if combined_risks else "None identified",
+                "reason_codes": " | ".join(combined_reasons[:6]) if combined_reasons else "No explicit reason codes",
+                "latest_news_titles": " | ".join(item.get("title", "") for item in prepared_news[:3]) or "No relevant headlines retained",
+            }))
             _update_status(phase="scoring", message=f"Scored {ticker}", progress_current=index, progress_total=total)
 
         deduped_rows, dedupe_messages = _dedupe_share_classes(candidate_rows)
@@ -302,18 +338,54 @@ def _run_scan_thread(run_id: str) -> None:
         replace_candidates(run_id, ranked_rows)
         shortlist_rows = ranked_rows[: settings.shortlist_size]
 
+        coverage_diagnostics = {
+            "funnel": {
+                "universe_available": len(all_universe_rows),
+                "universe_loaded": len(universe_rows),
+                "price_history_available": prefilter_diagnostics["price_history_available_count"],
+                "price_history_missing": prefilter_diagnostics["price_history_missing_count"],
+                "enrichment_selected": len(enriched_universe_rows),
+                "bundle_count": len(bundles),
+                "ranked_after_dedupe": len(ranked_rows),
+                "shortlist_size": len(shortlist_rows),
+            },
+            "feature_coverage": _coverage_counts(feature_rows, [
+                "fund_revenueGrowth",
+                "fund_earningsGrowth",
+                "fund_profitMargins",
+                "fund_operatingMargins",
+                "fund_debtToEquity",
+                "fund_currentRatio",
+                "fund_returnOnEquity",
+                "fund_forwardPE",
+                "fund_freeCashflowYield",
+                "timing_relative_strength_vs_spy",
+                "timing_relative_strength_vs_sector",
+                "catalyst_ticker_relevant_headline_count",
+                "catalyst_high_credibility_relevant_count",
+            ]),
+            "examples": {
+                "missing_price_history_examples": prefilter_diagnostics.get("missing_price_history_examples", []),
+            },
+        }
+
         scan_summary = {
             "run_id": run_id,
             "started_at": started_at,
             "ended_at": utc_now_iso(),
             "provider": provider.provider_name,
             "universe_name": settings.default_universe_name,
+            "universe_available": len(all_universe_rows),
             "universe_size_loaded": len(universe_rows),
             "bulk_price_ticker_count": len(bulk_tickers),
+            "price_history_available_count": prefilter_diagnostics["price_history_available_count"],
+            "price_history_missing_count": prefilter_diagnostics["price_history_missing_count"],
             "enrichment_size": len(enriched_universe_rows),
+            "bundle_count": len(bundles),
             "deduped_candidate_count": len(ranked_rows),
             "shortlist_size": len(shortlist_rows),
             "score_weights": {"structural": settings.structural_weight, "catalyst": settings.catalyst_weight, "timing": settings.timing_weight},
+            "configured_limits": {"scan_ticker_limit": settings.scan_ticker_limit, "enrichment_limit": settings.enrichment_limit, "shortlist_size": settings.shortlist_size},
             "note": "Version 1 outputs opportunity scores, not calibrated probabilities.",
             "warnings": warnings,
         }
@@ -339,16 +411,17 @@ def _run_scan_thread(run_id: str) -> None:
             converted["latest_news"] = latest_news
             converted["feature_snapshot"] = feature_snapshot
             ranked_json_rows.append(converted)
-            ranked_csv_rows.append({
+            ranked_csv_rows.append(sanitize_row({
                 k: v for k, v in converted.items() if k not in {"latest_news", "feature_snapshot", "cik"}
             } | {
-                "reason_codes": " | ".join(reason_codes),
-                "risk_flags": " | ".join(risk_flags),
-                "latest_news_titles": " | ".join(item.get("title", "") for item in latest_news[:3]),
-                "latest_news_publishers": " | ".join(item.get("publisher", "") for item in latest_news[:3]),
-            })
+                "reason_codes": " | ".join(reason_codes) if reason_codes else "No explicit reason codes",
+                "risk_flags": " | ".join(risk_flags) if risk_flags else "None identified",
+                "latest_news_titles": " | ".join(item.get("title", "") for item in latest_news[:3]) or "No relevant headlines retained",
+                "latest_news_publishers": " | ".join(item.get("publisher", "") for item in latest_news[:3]) or "No relevant publishers retained",
+            }))
 
         write_json(run_dir / "scan_summary.json", scan_summary)
+        write_json(run_dir / "coverage_diagnostics.json", coverage_diagnostics)
         write_csv(run_dir / "ranked_candidates.csv", ranked_csv_rows)
         write_json(run_dir / "ranked_candidates.json", ranked_json_rows)
         write_json(run_dir / "reasons_by_ticker.json", reasons_by_ticker)

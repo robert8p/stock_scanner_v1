@@ -115,3 +115,28 @@ Please upload back exactly these items:
 - live scheduling / drift handling / alerts
 
 Those still belong to Version 2 and Version 3.
+
+
+## V1.2 redeploy / retest notes
+
+Use or confirm these values in Render for the intended broad V1.2 scan:
+- `SCAN_TICKER_LIMIT=500`
+- `ENRICHMENT_LIMIT=120`
+- `YFINANCE_BULK_CHUNK_SIZE=100`
+
+After redeploy:
+1. Open `/settings` and confirm the scan cap shows `500` and enrichment cap shows `120`.
+2. Run one live scan from `/scanner`.
+3. Check `/latest-results` for the funnel counts row.
+4. Download both the scan pack and `coverage_diagnostics.json`.
+5. Upload back:
+   - the new `*_scan_pack.zip`
+   - `coverage_diagnostics.json`
+   - `/health`
+   - `/api/status`
+
+Pass condition for this tranche:
+- universe loaded is near full S&P 500 breadth
+- price-history coverage is high enough that enrichment is being chosen from a broad base
+- news quality in top names looks cleaner and less generic
+- no secrets leak and no NaN-style review glitches remain

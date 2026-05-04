@@ -28,8 +28,13 @@
     <button type="submit" class="primary-btn">Save settings</button>
   </form>
   <section class="note-box">
+    <h3>Recommended V1.2 defaults</h3>
+    <p>For the bundled S&amp;P 500 universe, use a scan cap of 500 and an enrichment cap of about 120 for broad coverage with manageable enrichment time.</p>
+    <p class="subtle">This package also batches yfinance price downloads so broad-universe scans are more reliable than earlier versions.</p>
+  </section>
+  <section class="note-box">
     <h3>Provider note</h3>
-    <p>The architecture is provider-based. This V1.1 package ships with a working yfinance path plus a deterministic demo mode for deployment smoke-testing, and includes a bundled S&P 500 fallback file so the universe does not collapse when live scraping fails.</p>
+    <p>The architecture is provider-based. This V1.2 package ships with a working yfinance path plus a deterministic demo mode for deployment smoke-testing, and includes a bundled S&amp;P 500 fallback file so the universe does not collapse when live scraping fails.</p>
     <p class="subtle">Future versions can extend this adapter layer to Polygon / Alpaca / Finnhub without changing the UI contract.</p>
   </section>
 </section>

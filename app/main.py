@@ -220,4 +220,4 @@ def api_settings():
 async def api_settings_update(request: Request):
     payload = await request.json()
     updated = persist_settings(payload)
-    return {"status": "updated", "settings": updated.to_dict()}
+    return {"status": "updated", "settings": sanitize_settings_payload(updated.to_dict())}

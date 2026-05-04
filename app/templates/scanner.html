@@ -6,6 +6,9 @@
     <p>Run an on-demand scan across the configured S&amp;P 500 slice. The app combines structural, catalyst, and timing scores into an overall opportunity score.</p>
     <button id="run-scan-btn" class="primary-btn">Run Scan</button>
     <p class="subtle">Provider: {{ 'demo' if settings.demo_mode else settings.default_provider }} · Universe slice: {{ settings.scan_ticker_limit }} · Full enrichment cap: {{ settings.enrichment_limit }}</p>
+    {% if settings.default_universe_name == 'S&P 500' and settings.scan_ticker_limit < 500 %}
+    <p class="subtle">Configured breadth is narrower than the available S&amp;P 500 universe. Raise the scan cap in Settings for broader coverage.</p>
+    {% endif %}
     <div id="scan-feedback" class="status-box">Ready</div>
     <div class="progress-wrap">
       <div id="scan-progress-bar" class="progress-bar"></div>
@@ -29,6 +32,15 @@
     <a class="link-btn" href="/latest-results">Open latest results</a>
   </div>
   <p class="subtle">Run {{ latest.run_id }} · Status {{ latest.status }} · Provider {{ latest.provider }}</p>
+  {% if latest.summary %}
+  <div class="metric-grid">
+    <div class="metric-card"><span>Universe available</span><strong>{{ latest.summary.universe_available or latest.summary.universe_size_loaded }}</strong></div>
+    <div class="metric-card"><span>Universe loaded</span><strong>{{ latest.summary.universe_size_loaded }}</strong></div>
+    <div class="metric-card"><span>Price history coverage</span><strong>{{ latest.summary.price_history_available_count or latest.summary.enrichment_size }}</strong></div>
+    <div class="metric-card"><span>Enriched</span><strong>{{ latest.summary.enrichment_size }}</strong></div>
+    <div class="metric-card"><span>Ranked after dedupe</span><strong>{{ latest.summary.deduped_candidate_count }}</strong></div>
+  </div>
+  {% endif %}
   <div class="table-wrap">
     <table>
       <thead>

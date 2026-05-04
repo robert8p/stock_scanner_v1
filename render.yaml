@@ -48,3 +48,5 @@ services:
         value: 0.30
       - key: TIMING_WEIGHT
         value: 0.35
+      - key: YFINANCE_BULK_CHUNK_SIZE
+        value: 100
