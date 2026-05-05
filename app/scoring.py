@@ -49,9 +49,23 @@ GENERIC_MARKET_PATTERNS = {
     "stocks to watch", "wall street", "stock market today", "market open", "market close",
     "futures rise", "futures fall", "s&p 500", "dow jones", "nasdaq", "magnificent 7",
     "top stocks", "best stocks", "stocks to buy", "investor attention", "what you should know",
+    "here is what to know", "what to watch", "trending stock", "share price run", "surges on strong earnings",
+    "solid growth stock", "good stock to buy", "momentum stock to buy", "too late to consider",
 }
-LOW_SIGNAL_PUBLISHERS = {"Zacks", "Simply Wall St.", "Insider Monkey", "GuruFocus.com", "Benzinga"}
+LOW_SIGNAL_PUBLISHERS = {"Zacks", "Simply Wall St.", "Insider Monkey", "GuruFocus.com", "Benzinga", "StockStory", "24/7 Wall St.", "InvestorsHub"}
+LOW_SIGNAL_TITLE_PATTERNS = [
+    r"why (?:is|did|does) .* stock",
+    r"is .* a good stock to buy",
+    r"is it too late to consider",
+    r"here(?:'| i)?s why",
+    r"solid growth stock",
+    r"strong momentum stock",
+    r"trending stock",
+    r"what to know beyond why",
+    r"what to watch",
+]
 COMPANY_STOPWORDS = {"inc", "corp", "corporation", "company", "co", "holdings", "group", "class", "plc", "ltd", "the"}
+
 
 
 def normalize_sector_name(sector: str | None) -> str:
@@ -139,92 +153,110 @@ def score_timing(metrics: Dict[str, Any]) -> Tuple[float, List[str], List[str], 
     warnings = list(metrics.get("warnings", []))
     reasons: List[str] = []
     risks: List[str] = []
-    score = 45.0
+    score = 30.0
 
     latest = metrics.get("latest_close")
     sma20 = metrics.get("sma20")
     sma50 = metrics.get("sma50")
     sma200 = metrics.get("sma200")
     if latest and sma20 and latest > sma20:
-        score += 8
+        score += 6
         reasons.append("Price above 20-day average")
     else:
+        score -= 4
         risks.append("Price not above 20-day average")
     if latest and sma50 and latest > sma50:
-        score += 8
+        score += 7
         reasons.append("Price above 50-day average")
     else:
+        score -= 5
         risks.append("Price not above 50-day average")
     if latest and sma200 and latest > sma200:
-        score += 10
+        score += 8
         reasons.append("Price above 200-day average")
     else:
+        score -= 10
         risks.append("Price below 200-day average")
 
     one_month = metrics.get("one_month_return")
     three_month = metrics.get("three_month_return")
     if one_month is not None:
-        score += clamp(one_month * 100, -8, 10)
-        if one_month > 0:
+        score += clamp(one_month * 80, -8, 8)
+        if one_month > 0.04:
             reasons.append("Positive 1-month momentum")
+        elif one_month < 0:
+            risks.append("Negative 1-month momentum")
     if three_month is not None:
-        score += clamp(three_month * 80, -10, 12)
-        if three_month > 0:
+        score += clamp(three_month * 60, -10, 10)
+        if three_month > 0.08:
             reasons.append("Positive 3-month momentum")
+        elif three_month < 0:
+            risks.append("Negative 3-month momentum")
 
     rs_spy = metrics.get("relative_strength_vs_spy")
     if rs_spy is not None:
-        score += clamp(rs_spy * 120, -6, 8)
-        if rs_spy > 0:
+        score += clamp(rs_spy * 100, -8, 8)
+        if rs_spy > 0.03:
             reasons.append("Outperforming SPY")
-        else:
+        elif rs_spy < 0:
             risks.append("Lagging SPY")
 
     rs_sector = metrics.get("relative_strength_vs_sector")
     if rs_sector is not None:
-        score += clamp(rs_sector * 120, -5, 7)
-        if rs_sector > 0:
+        score += clamp(rs_sector * 90, -7, 7)
+        if rs_sector > 0.02:
             reasons.append("Outperforming sector ETF")
-        else:
+        elif rs_sector < 0:
             risks.append("Lagging sector ETF")
     else:
         risks.append("Sector-relative strength unavailable")
 
     rsi = metrics.get("rsi14")
     if rsi is not None:
-        if 50 <= rsi <= 68:
-            score += 6
+        if 52 <= rsi <= 67:
+            score += 7
             reasons.append("RSI in constructive trend range")
+        elif 67 < rsi <= 74:
+            score += 3
+            reasons.append("RSI strong but not extreme")
+        elif 74 < rsi <= 78:
+            score -= 2
+            risks.append("RSI approaching stretched territory")
         elif rsi > 78:
-            score -= 6
+            score -= 8
             risks.append("RSI looks stretched")
         elif rsi < 40:
-            score -= 4
+            score -= 6
             risks.append("RSI below healthy trend zone")
 
     volume_ratio = metrics.get("volume_ratio")
     if volume_ratio is not None:
-        if volume_ratio >= 1.3:
-            score += 6
+        if volume_ratio >= 1.4:
+            score += 5
             reasons.append("Volume running above 20-day average")
+        elif volume_ratio >= 1.05:
+            score += 2
+            reasons.append("Volume at least modestly supportive")
         elif volume_ratio < 0.7:
-            score -= 2
+            score -= 4
             risks.append("Volume muted versus 20-day average")
 
     dist_to_high = metrics.get("dist_to_52w_high")
     if dist_to_high is not None:
-        if -0.12 <= dist_to_high <= -0.01:
-            score += 5
+        if -0.15 <= dist_to_high <= -0.03:
+            score += 4
             reasons.append("Trading close to 52-week highs without extreme stretch")
-        elif dist_to_high > -0.005:
-            score -= 2
+        elif -0.03 < dist_to_high <= -0.01:
+            score += 1
+        elif dist_to_high > -0.01:
+            score -= 5
             risks.append("Very close to 52-week highs; could be extended")
         elif dist_to_high < -0.25:
-            score -= 5
+            score -= 6
             risks.append("Far below 52-week highs")
 
     if metrics.get("breakout"):
-        score += 5
+        score += 4
         reasons.append("Potential breakout with volume support")
 
     summary_bits = []
@@ -238,7 +270,6 @@ def score_timing(metrics: Dict[str, Any]) -> Tuple[float, List[str], List[str], 
         summary_bits.append(f"vol ratio {volume_ratio:.2f}x")
     technical_summary = "; ".join(summary_bits) if summary_bits else "Timing data incomplete"
     return round(clamp(score), 2), reasons[:5], warnings + risks[:5], technical_summary
-
 
 def score_structural(bundle: TickerDataBundle) -> Tuple[float, List[str], List[str], str]:
     f = bundle.fundamentals or {}
@@ -361,33 +392,36 @@ def _news_relevance(item: NewsItem, ticker: str, company_name: str) -> tuple[flo
     company_hits = _mentions_company(company_name, text)
     related_match = ticker.upper() in related
     generic_pattern = any(pattern in text for pattern in GENERIC_MARKET_PATTERNS)
+    low_signal_title = any(re.search(pattern, title) for pattern in LOW_SIGNAL_TITLE_PATTERNS)
     multi_ticker_noise = len(related) >= 4
 
     relevance = 0.0
     if ticker_in_title_or_summary:
-        relevance += 1.2
+        relevance += 1.4
     if company_hits >= 2:
         relevance += 1.0
     elif company_hits == 1:
         relevance += 0.6
     if related_match:
-        relevance += 0.4
+        relevance += 0.35
     if generic_pattern:
-        relevance -= 0.9
-    if multi_ticker_noise:
-        relevance -= 0.4
-    if not ticker_in_title_or_summary and company_hits == 0 and not related_match:
         relevance -= 1.0
+    if low_signal_title:
+        relevance -= 0.8
+    if multi_ticker_noise:
+        relevance -= 0.5
+    if not ticker_in_title_or_summary and company_hits == 0 and not related_match:
+        relevance -= 1.2
 
     signals = {
         "ticker_in_text": ticker_in_title_or_summary,
         "company_hits": company_hits,
         "related_match": related_match,
         "generic_pattern": generic_pattern,
+        "low_signal_title": low_signal_title,
         "multi_ticker_noise": multi_ticker_noise,
     }
     return relevance, signals
-
 
 def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: str = "") -> Tuple[float, List[str], List[str], Dict[str, Any], List[Dict[str, Any]]]:
     empty_metrics = {
@@ -398,12 +432,15 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         "filtered_generic_count": 0,
         "filtered_irrelevant_count": 0,
         "high_credibility_relevant_count": 0,
+        "low_signal_relevant_count": 0,
+        "unique_relevant_publishers": 0,
+        "low_signal_relevant_ratio": 0.0,
     }
     if not news_items:
-        return 42.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], empty_metrics, []
+        return 38.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], empty_metrics, []
 
     now = datetime.now(timezone.utc)
-    score = 46.0
+    score = 40.0
     reasons: List[str] = []
     risks: List[str] = []
     positive_hits = 0
@@ -411,9 +448,11 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
     filtered_generic_count = 0
     filtered_irrelevant_count = 0
     high_credibility_relevant_count = 0
+    low_signal_relevant_count = 0
     prepared_news: List[Dict[str, Any]] = []
     seen_titles = set()
     relevant_count = 0
+    relevant_publishers: set[str] = set()
 
     for item in news_items[:15]:
         normalized_title = (item.title or "").strip().lower()
@@ -422,42 +461,47 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         seen_titles.add(normalized_title)
 
         relevance, signals = _news_relevance(item, ticker, company_name)
-        if signals["generic_pattern"]:
+        if signals["generic_pattern"] or signals["low_signal_title"]:
             filtered_generic_count += 1
-        if relevance < 0.75 or (signals["generic_pattern"] and not signals["ticker_in_text"] and signals["company_hits"] == 0):
+        if relevance < 1.0 or ((signals["generic_pattern"] or signals["low_signal_title"]) and not signals["ticker_in_text"] and signals["company_hits"] == 0):
             filtered_irrelevant_count += 1
             continue
 
-        text = f"{item.title} {item.summary}".lower()
-        pos_count = sum(1 for word in POSITIVE_NEWS_WORDS if word in text)
-        neg_count = sum(1 for word in NEGATIVE_NEWS_WORDS if word in text)
+        text_blob = f"{item.title} {item.summary}".lower()
+        pos_count = sum(1 for word in POSITIVE_NEWS_WORDS if word in text_blob)
+        neg_count = sum(1 for word in NEGATIVE_NEWS_WORDS if word in text_blob)
         positive_hits += pos_count
         negative_hits += neg_count
 
         if item.publisher in HIGH_CREDIBILITY_PUBLISHERS:
-            credibility = 1.05
+            credibility = 1.15
             high_credibility_relevant_count += 1
         elif item.publisher in LOW_SIGNAL_PUBLISHERS:
-            credibility = 0.55
+            credibility = 0.35
+            low_signal_relevant_count += 1
         else:
-            credibility = 0.75
+            credibility = 0.65
 
-        recency_weight = 0.7
+        recency_weight = 0.65
         if item.published_at:
             try:
                 published_dt = datetime.fromisoformat(item.published_at.replace("Z", "+00:00"))
                 if published_dt.tzinfo is None:
                     published_dt = published_dt.replace(tzinfo=timezone.utc)
                 hours_old = max((now - published_dt).total_seconds() / 3600.0, 0.0)
-                recency_weight = 1.0 if hours_old <= 24 else 0.85 if hours_old <= 72 else 0.65
+                recency_weight = 1.0 if hours_old <= 24 else 0.8 if hours_old <= 72 else 0.55
             except Exception:
                 pass
 
-        sentiment_signal = (pos_count - neg_count) * 4.2
-        mention_bonus = 1.25 if signals["ticker_in_text"] or signals["company_hits"] >= 1 else 0.85
-        delta = sentiment_signal * credibility * recency_weight * min(max(relevance, 0.75), 1.8) * mention_bonus
+        sentiment_signal = (pos_count - neg_count) * 3.0
+        mention_bonus = 1.2 if signals["ticker_in_text"] or signals["company_hits"] >= 1 else 0.8
+        delta = sentiment_signal * credibility * recency_weight * min(max(relevance, 1.0), 2.0) * mention_bonus
+        if item.publisher in LOW_SIGNAL_PUBLISHERS and not signals["ticker_in_text"] and not signals["related_match"]:
+            delta *= 0.6
         score += delta
         relevant_count += 1
+        if item.publisher:
+            relevant_publishers.add(item.publisher)
         prepared_news.append({
             "title": item.title,
             "publisher": item.publisher,
@@ -468,24 +512,36 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
             "relevance": round(relevance, 2),
             "related_tickers": list(item.related_tickers or []),
             "high_credibility": item.publisher in HIGH_CREDIBILITY_PUBLISHERS,
+            "low_signal_publisher": item.publisher in LOW_SIGNAL_PUBLISHERS,
         })
 
     if relevant_count == 0:
         metrics = {**empty_metrics, "headline_count": len(news_items), "filtered_generic_count": filtered_generic_count, "filtered_irrelevant_count": filtered_irrelevant_count}
-        return 42.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], metrics, []
+        return 38.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], metrics, []
+
+    low_signal_ratio = low_signal_relevant_count / relevant_count if relevant_count else 0.0
 
     if positive_hits > negative_hits:
         reasons.append("Ticker-specific recent news flow skewing positive")
-    if positive_hits >= 2:
+    if positive_hits >= 3:
         reasons.append("Multiple positive catalyst terms in relevant headlines")
     if high_credibility_relevant_count >= 1:
         reasons.append("At least one higher-credibility relevant headline present")
+    if len(relevant_publishers) >= 3:
+        reasons.append("Catalyst evidence spread across multiple publishers")
     if negative_hits > positive_hits:
         risks.append("Ticker-specific recent news flow skewing negative")
     if negative_hits >= 2:
         risks.append("Negative catalyst terms present in relevant headlines")
     if high_credibility_relevant_count == 0:
-        risks.append("Relevant catalyst coverage is mostly lower-credibility")
+        score -= 6
+        risks.append("No higher-credibility catalyst headline retained")
+    if low_signal_ratio >= 0.6:
+        score -= 8
+        risks.append("Catalyst evidence dominated by low-signal publishers")
+    elif low_signal_ratio >= 0.35:
+        score -= 4
+        risks.append("Catalyst evidence leans on low-signal publishers")
 
     score = round(clamp(score), 2)
     metrics = {
@@ -496,10 +552,12 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         "filtered_generic_count": filtered_generic_count,
         "filtered_irrelevant_count": filtered_irrelevant_count,
         "high_credibility_relevant_count": high_credibility_relevant_count,
+        "low_signal_relevant_count": low_signal_relevant_count,
+        "unique_relevant_publishers": len(relevant_publishers),
+        "low_signal_relevant_ratio": round(low_signal_ratio, 3),
     }
-    prepared_news = sorted(prepared_news, key=lambda item: (item.get("high_credibility", False), item.get("relevance", 0), item.get("sentiment_delta", 0)), reverse=True)
+    prepared_news = sorted(prepared_news, key=lambda item: (item.get("high_credibility", False), not item.get("low_signal_publisher", False), item.get("relevance", 0), item.get("sentiment_delta", 0)), reverse=True)
     return score, reasons[:5], risks[:5], metrics, prepared_news[:5]
-
 
 def confidence_band(score: float) -> str:
     if score >= 80:

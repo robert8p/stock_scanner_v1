@@ -192,6 +192,38 @@ def _coverage_counts(feature_rows: List[Dict[str, Any]], columns: List[str]) -> 
     return payload
 
 
+
+
+def _score_diagnostics(rows: List[Dict[str, Any]], shortlist_size: int) -> Dict[str, Any]:
+    def stats(values: List[float]) -> Dict[str, Any]:
+        if not values:
+            return {"count": 0, "min": None, "p25": None, "median": None, "p75": None, "max": None, "mean": None, "std": None, "pct_ge_90": 0.0, "pct_eq_100": 0.0}
+        series = pd.Series(values, dtype=float)
+        return {
+            "count": int(series.count()),
+            "min": round(float(series.min()), 2),
+            "p25": round(float(series.quantile(0.25)), 2),
+            "median": round(float(series.median()), 2),
+            "p75": round(float(series.quantile(0.75)), 2),
+            "max": round(float(series.max()), 2),
+            "mean": round(float(series.mean()), 2),
+            "std": round(float(series.std(ddof=0)), 2),
+            "pct_ge_90": round(float((series >= 90).mean()) * 100, 1),
+            "pct_eq_100": round(float((series == 100).mean()) * 100, 1),
+        }
+
+    metrics = ["overall_score", "structural_score", "catalyst_score", "timing_score"]
+    payload = {
+        "ranked": {metric: stats([float(row.get(metric, 0) or 0) for row in rows]) for metric in metrics},
+        "shortlist": {metric: stats([float(row.get(metric, 0) or 0) for row in rows[:shortlist_size]]) for metric in metrics},
+    }
+    payload["flags"] = {
+        "timing_saturation_warning": payload["ranked"]["timing_score"]["pct_eq_100"] >= 50.0,
+        "timing_score_pct_eq_100": payload["ranked"]["timing_score"]["pct_eq_100"],
+        "catalyst_score_pct_ge_90": payload["ranked"]["catalyst_score"]["pct_ge_90"],
+    }
+    return payload
+
 def run_scan_now() -> str:
     global LAST_SCAN_STARTED_AT
     settings = load_settings()
@@ -363,11 +395,16 @@ def _run_scan_thread(run_id: str) -> None:
                 "timing_relative_strength_vs_sector",
                 "catalyst_ticker_relevant_headline_count",
                 "catalyst_high_credibility_relevant_count",
+                "catalyst_low_signal_relevant_count",
+                "catalyst_unique_relevant_publishers",
+                "catalyst_low_signal_relevant_ratio",
             ]),
             "examples": {
                 "missing_price_history_examples": prefilter_diagnostics.get("missing_price_history_examples", []),
             },
         }
+
+        score_diagnostics = _score_diagnostics(ranked_rows, settings.shortlist_size)
 
         scan_summary = {
             "run_id": run_id,
@@ -388,6 +425,7 @@ def _run_scan_thread(run_id: str) -> None:
             "configured_limits": {"scan_ticker_limit": settings.scan_ticker_limit, "enrichment_limit": settings.enrichment_limit, "shortlist_size": settings.shortlist_size},
             "note": "Version 1 outputs opportunity scores, not calibrated probabilities.",
             "warnings": warnings,
+            "score_diagnostics": score_diagnostics,
         }
 
         reasons_by_ticker = {
@@ -422,6 +460,7 @@ def _run_scan_thread(run_id: str) -> None:
 
         write_json(run_dir / "scan_summary.json", scan_summary)
         write_json(run_dir / "coverage_diagnostics.json", coverage_diagnostics)
+        write_json(run_dir / "score_diagnostics.json", score_diagnostics)
         write_csv(run_dir / "ranked_candidates.csv", ranked_csv_rows)
         write_json(run_dir / "ranked_candidates.json", ranked_json_rows)
         write_json(run_dir / "reasons_by_ticker.json", reasons_by_ticker)
