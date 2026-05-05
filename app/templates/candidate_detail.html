@@ -5,10 +5,14 @@
     <p class="subtle">Run {{ run.run_id }}</p>
     <h2>{{ candidate.ticker }} — {{ candidate.company_name }}</h2>
     <p><strong>Overall opportunity score:</strong> {{ '%.2f'|format(candidate.overall_score) }} ({{ candidate.confidence_band }})</p>
+    <p><strong>Opportunity type:</strong> {{ candidate.opportunity_type }}</p>
+    <p><strong>Catalyst truth:</strong> {{ candidate.catalyst_truth_label }}</p>
     <div class="metric-grid">
       <div class="metric-card"><span>Structural</span><strong>{{ '%.2f'|format(candidate.structural_score) }}</strong></div>
       <div class="metric-card"><span>Catalyst</span><strong>{{ '%.2f'|format(candidate.catalyst_score) }}</strong></div>
       <div class="metric-card"><span>Timing</span><strong>{{ '%.2f'|format(candidate.timing_score) }}</strong></div>
+      <div class="metric-card"><span>High-credibility headlines</span><strong>{{ candidate.catalyst_high_credibility_count }}</strong></div>
+      <div class="metric-card"><span>Low-signal ratio</span><strong>{{ '%.2f'|format(candidate.catalyst_low_signal_ratio or 0) }}</strong></div>
     </div>
     <p><strong>Technical summary:</strong> {{ candidate.technical_summary }}</p>
     <p><strong>Fundamental summary:</strong> {{ candidate.fundamental_summary }}</p>

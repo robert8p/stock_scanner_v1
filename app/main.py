@@ -45,6 +45,14 @@ def health() -> Dict[str, Any]:
     }
 
 
+def _json_download(payload: Dict[str, Any], filename: str):
+    tmp_dir = Path(load_settings().artifacts_dir) / "_downloads"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    path = tmp_dir / filename
+    path.write_text(json.dumps(payload, indent=2, default=str))
+    return FileResponse(path, filename=filename, media_type="application/json")
+
+
 @app.get("/scanner", response_class=HTMLResponse)
 def scanner_page(request: Request):
     latest = latest_run_with_candidates()
@@ -135,6 +143,16 @@ def status_page(request: Request):
         name="status.html",
         context={"request": request, "health": health(), "runtime_status": get_runtime_status()},
     )
+
+
+@app.get("/download/health")
+def download_health():
+    return _json_download(health(), "health.json")
+
+
+@app.get("/download/status")
+def download_status():
+    return _json_download(get_runtime_status(), "status.json")
 
 
 @app.get("/api/status")

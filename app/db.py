@@ -73,6 +73,11 @@ def init_db() -> None:
                 technical_summary TEXT,
                 fundamental_summary TEXT,
                 feature_snapshot_json TEXT,
+                opportunity_type TEXT,
+                catalyst_truth_label TEXT,
+                catalyst_support_level TEXT,
+                catalyst_high_credibility_count INTEGER,
+                catalyst_low_signal_ratio REAL,
                 PRIMARY KEY (run_id, ticker)
             )
             """
@@ -80,6 +85,16 @@ def init_db() -> None:
         existing_candidate_cols = {row[1] for row in cur.execute("PRAGMA table_info(candidates)").fetchall()}
         if "cik" not in existing_candidate_cols:
             cur.execute("ALTER TABLE candidates ADD COLUMN cik TEXT")
+        if "opportunity_type" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN opportunity_type TEXT")
+        if "catalyst_truth_label" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_truth_label TEXT")
+        if "catalyst_support_level" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_support_level TEXT")
+        if "catalyst_high_credibility_count" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_high_credibility_count INTEGER")
+        if "catalyst_low_signal_ratio" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_low_signal_ratio REAL")
 
 
 def upsert_run(record: Dict[str, Any]) -> None:

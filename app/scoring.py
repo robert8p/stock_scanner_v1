@@ -423,6 +423,50 @@ def _news_relevance(item: NewsItem, ticker: str, company_name: str) -> tuple[flo
     }
     return relevance, signals
 
+def classify_catalyst_truth(metrics: Dict[str, Any], catalyst_score: float | None = None) -> Dict[str, Any]:
+    relevant_count = int(metrics.get("ticker_relevant_headline_count") or 0)
+    positive_hits = int(metrics.get("positive_hits") or 0)
+    negative_hits = int(metrics.get("negative_hits") or 0)
+    high_credibility_count = int(metrics.get("high_credibility_relevant_count") or 0)
+    unique_publishers = int(metrics.get("unique_relevant_publishers") or 0)
+    low_signal_ratio = float(metrics.get("low_signal_relevant_ratio") or 0.0)
+
+    has_positive_skew = positive_hits > negative_hits
+    if high_credibility_count >= 1 and relevant_count >= 1 and has_positive_skew and low_signal_ratio < 0.5:
+        support_level = "backed"
+        opportunity_type = "Catalyst-backed opportunity"
+        truth_label = "Catalyst-backed"
+    elif relevant_count >= 2 and has_positive_skew and unique_publishers >= 2 and low_signal_ratio < 0.35:
+        support_level = "supported"
+        opportunity_type = "Catalyst-supported opportunity"
+        truth_label = "Catalyst-supported"
+    elif relevant_count >= 1 and positive_hits >= negative_hits and low_signal_ratio < 0.65:
+        support_level = "mixed"
+        opportunity_type = "Quality/momentum opportunity"
+        truth_label = "Catalyst mixed / unconfirmed"
+    else:
+        support_level = "weak"
+        opportunity_type = "Quality/momentum opportunity"
+        truth_label = "Catalyst weak / unconfirmed"
+
+    rank_penalty = {
+        "backed": 0.0,
+        "supported": 1.0,
+        "mixed": 3.0,
+        "weak": 6.0,
+    }[support_level]
+    if catalyst_score is not None and catalyst_score < 35:
+        rank_penalty += 1.0
+
+    return {
+        "support_level": support_level,
+        "opportunity_type": opportunity_type,
+        "truth_label": truth_label,
+        "rank_penalty": rank_penalty,
+    }
+
+
+
 def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: str = "") -> Tuple[float, List[str], List[str], Dict[str, Any], List[Dict[str, Any]]]:
     empty_metrics = {
         "headline_count": 0,
@@ -435,12 +479,17 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         "low_signal_relevant_count": 0,
         "unique_relevant_publishers": 0,
         "low_signal_relevant_ratio": 0.0,
+        "credible_positive_headline_count": 0,
+        "support_level": "weak",
+        "opportunity_type": "Quality/momentum opportunity",
+        "truth_label": "Catalyst weak / unconfirmed",
+        "rank_penalty": 6.0,
     }
     if not news_items:
-        return 38.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], empty_metrics, []
+        return 26.0, ["No recent catalyst confirmation"], ["Recent news sparse or unavailable"], empty_metrics, []
 
     now = datetime.now(timezone.utc)
-    score = 40.0
+    score = 28.0
     reasons: List[str] = []
     risks: List[str] = []
     positive_hits = 0
@@ -449,6 +498,7 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
     filtered_irrelevant_count = 0
     high_credibility_relevant_count = 0
     low_signal_relevant_count = 0
+    credible_positive_headline_count = 0
     prepared_news: List[Dict[str, Any]] = []
     seen_titles = set()
     relevant_count = 0
@@ -473,51 +523,68 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         positive_hits += pos_count
         negative_hits += neg_count
 
-        if item.publisher in HIGH_CREDIBILITY_PUBLISHERS:
-            credibility = 1.15
+        publisher = item.publisher or ""
+        high_credibility = publisher in HIGH_CREDIBILITY_PUBLISHERS
+        low_signal = publisher in LOW_SIGNAL_PUBLISHERS
+        if high_credibility:
+            credibility = 1.2
             high_credibility_relevant_count += 1
-        elif item.publisher in LOW_SIGNAL_PUBLISHERS:
-            credibility = 0.35
+        elif low_signal:
+            credibility = 0.15
             low_signal_relevant_count += 1
         else:
-            credibility = 0.65
+            credibility = 0.55
 
-        recency_weight = 0.65
+        recency_weight = 0.55
         if item.published_at:
             try:
                 published_dt = datetime.fromisoformat(item.published_at.replace("Z", "+00:00"))
                 if published_dt.tzinfo is None:
                     published_dt = published_dt.replace(tzinfo=timezone.utc)
                 hours_old = max((now - published_dt).total_seconds() / 3600.0, 0.0)
-                recency_weight = 1.0 if hours_old <= 24 else 0.8 if hours_old <= 72 else 0.55
+                recency_weight = 1.0 if hours_old <= 24 else 0.75 if hours_old <= 72 else 0.45
             except Exception:
                 pass
 
-        sentiment_signal = (pos_count - neg_count) * 3.0
-        mention_bonus = 1.2 if signals["ticker_in_text"] or signals["company_hits"] >= 1 else 0.8
+        sentiment_signal = (pos_count * 2.6) - (neg_count * 3.2)
+        mention_bonus = 1.15 if signals["ticker_in_text"] or signals["company_hits"] >= 1 else 0.75
         delta = sentiment_signal * credibility * recency_weight * min(max(relevance, 1.0), 2.0) * mention_bonus
-        if item.publisher in LOW_SIGNAL_PUBLISHERS and not signals["ticker_in_text"] and not signals["related_match"]:
-            delta *= 0.6
+
+        if low_signal:
+            if not signals["ticker_in_text"] and not signals["related_match"]:
+                delta *= 0.2
+            else:
+                delta *= 0.4
+        if signals["generic_pattern"]:
+            delta *= 0.35
+        if signals["low_signal_title"]:
+            delta *= 0.25
+        if relevance < 1.3:
+            delta *= 0.7
+
+        if high_credibility and pos_count > neg_count:
+            credible_positive_headline_count += 1
+
         score += delta
         relevant_count += 1
-        if item.publisher:
-            relevant_publishers.add(item.publisher)
+        if publisher:
+            relevant_publishers.add(publisher)
         prepared_news.append({
             "title": item.title,
-            "publisher": item.publisher,
+            "publisher": publisher,
             "published_at": item.published_at,
             "link": item.link,
             "summary": item.summary,
             "sentiment_delta": round(delta, 2),
             "relevance": round(relevance, 2),
             "related_tickers": list(item.related_tickers or []),
-            "high_credibility": item.publisher in HIGH_CREDIBILITY_PUBLISHERS,
-            "low_signal_publisher": item.publisher in LOW_SIGNAL_PUBLISHERS,
+            "high_credibility": high_credibility,
+            "low_signal_publisher": low_signal,
         })
 
     if relevant_count == 0:
         metrics = {**empty_metrics, "headline_count": len(news_items), "filtered_generic_count": filtered_generic_count, "filtered_irrelevant_count": filtered_irrelevant_count}
-        return 38.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], metrics, []
+        return 24.0, ["No ticker-specific recent catalyst confirmation"], ["News feed was generic or weakly related"], metrics, []
 
     low_signal_ratio = low_signal_relevant_count / relevant_count if relevant_count else 0.0
 
@@ -527,21 +594,32 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         reasons.append("Multiple positive catalyst terms in relevant headlines")
     if high_credibility_relevant_count >= 1:
         reasons.append("At least one higher-credibility relevant headline present")
+    if credible_positive_headline_count >= 1:
+        reasons.append("Higher-credibility catalyst headline skewed positive")
     if len(relevant_publishers) >= 3:
         reasons.append("Catalyst evidence spread across multiple publishers")
+
     if negative_hits > positive_hits:
         risks.append("Ticker-specific recent news flow skewing negative")
     if negative_hits >= 2:
         risks.append("Negative catalyst terms present in relevant headlines")
     if high_credibility_relevant_count == 0:
-        score -= 6
-        risks.append("No higher-credibility catalyst headline retained")
-    if low_signal_ratio >= 0.6:
         score -= 8
+        risks.append("No higher-credibility catalyst headline retained")
+    if relevant_count < 2:
+        score -= 4
+        risks.append("Catalyst confirmation thin")
+    if low_signal_ratio >= 0.6:
+        score -= 12
         risks.append("Catalyst evidence dominated by low-signal publishers")
     elif low_signal_ratio >= 0.35:
-        score -= 4
+        score -= 6
         risks.append("Catalyst evidence leans on low-signal publishers")
+
+    if high_credibility_relevant_count == 0 and low_signal_ratio >= 0.35:
+        score = min(score, 32.0)
+    elif high_credibility_relevant_count == 0 and relevant_count < 2:
+        score = min(score, 34.0)
 
     score = round(clamp(score), 2)
     metrics = {
@@ -555,11 +633,32 @@ def score_catalyst(news_items: List[NewsItem], ticker: str = "", company_name: s
         "low_signal_relevant_count": low_signal_relevant_count,
         "unique_relevant_publishers": len(relevant_publishers),
         "low_signal_relevant_ratio": round(low_signal_ratio, 3),
+        "credible_positive_headline_count": credible_positive_headline_count,
     }
+    metrics.update(classify_catalyst_truth(metrics, score))
     prepared_news = sorted(prepared_news, key=lambda item: (item.get("high_credibility", False), not item.get("low_signal_publisher", False), item.get("relevance", 0), item.get("sentiment_delta", 0)), reverse=True)
-    return score, reasons[:5], risks[:5], metrics, prepared_news[:5]
+    return score, reasons[:6], risks[:6], metrics, prepared_news[:5]
 
-def confidence_band(score: float) -> str:
+
+def confidence_band(score: float, catalyst_support_level: str = "mixed") -> str:
+    if catalyst_support_level == "weak":
+        if score >= 75:
+            return "Quality/momentum watchlist"
+        if score >= 60:
+            return "Constructive watchlist"
+        if score >= 50:
+            return "Mixed / neutral"
+        return "Weak / avoid for now"
+    if catalyst_support_level == "mixed":
+        if score >= 80:
+            return "Quality/momentum leader"
+        if score >= 70:
+            return "Constructive watchlist"
+        if score >= 60:
+            return "Constructive watchlist"
+        if score >= 50:
+            return "Mixed / neutral"
+        return "Weak / avoid for now"
     if score >= 80:
         return "Very strong setup"
     if score >= 70:
@@ -569,3 +668,4 @@ def confidence_band(score: float) -> str:
     if score >= 50:
         return "Mixed / neutral"
     return "Weak / avoid for now"
+

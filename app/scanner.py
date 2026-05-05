@@ -319,7 +319,12 @@ def _run_scan_thread(run_id: str) -> None:
 
             combined_reasons = list(dict.fromkeys(structural_reasons + catalyst_reasons + timing_reasons))
             combined_risks = [item for item in dict.fromkeys(bundle.warnings + structural_risks + catalyst_risks + timing_risks) if item]
-            overall_score = round(structural_score * settings.structural_weight + catalyst_score * settings.catalyst_weight + timing_score * settings.timing_weight, 2)
+            raw_overall_score = structural_score * settings.structural_weight + catalyst_score * settings.catalyst_weight + timing_score * settings.timing_weight
+            overall_score = round(max(raw_overall_score - float(catalyst_metrics.get("rank_penalty", 0.0) or 0.0), 0.0), 2)
+            opportunity_type = catalyst_metrics.get("opportunity_type", "Quality/momentum opportunity")
+            catalyst_truth_label = catalyst_metrics.get("truth_label", "Catalyst weak / unconfirmed")
+            catalyst_support_level = catalyst_metrics.get("support_level", "weak")
+            confidence = confidence_band(overall_score, catalyst_support_level)
             candidate_rows.append({
                 "run_id": run_id,
                 "rank": 0,
@@ -332,7 +337,12 @@ def _run_scan_thread(run_id: str) -> None:
                 "structural_score": structural_score,
                 "catalyst_score": catalyst_score,
                 "timing_score": timing_score,
-                "confidence_band": confidence_band(overall_score),
+                "confidence_band": confidence,
+                "opportunity_type": opportunity_type,
+                "catalyst_truth_label": catalyst_truth_label,
+                "catalyst_support_level": catalyst_support_level,
+                "catalyst_high_credibility_count": int(catalyst_metrics.get("high_credibility_relevant_count") or 0),
+                "catalyst_low_signal_ratio": float(catalyst_metrics.get("low_signal_relevant_ratio") or 0.0),
                 "reason_codes_json": json.dumps(combined_reasons[:6]),
                 "risk_flags_json": json.dumps(combined_risks[:6]),
                 "latest_news_json": json.dumps(prepared_news[:5]),
@@ -351,6 +361,9 @@ def _run_scan_thread(run_id: str) -> None:
                 **{f"timing_{k}": v for k, v in timing_metrics.items() if k != "warnings"},
                 **{f"fund_{k}": v for k, v in (bundle.fundamentals or {}).items()},
                 **{f"catalyst_{k}": v for k, v in catalyst_metrics.items()},
+                "opportunity_type": opportunity_type,
+                "catalyst_truth_label": catalyst_truth_label,
+                "catalyst_support_level": catalyst_support_level,
                 "risk_flags": " | ".join(combined_risks[:6]) if combined_risks else "None identified",
                 "reason_codes": " | ".join(combined_reasons[:6]) if combined_reasons else "No explicit reason codes",
                 "latest_news_titles": " | ".join(item.get("title", "") for item in prepared_news[:3]) or "No relevant headlines retained",
@@ -399,12 +412,24 @@ def _run_scan_thread(run_id: str) -> None:
                 "catalyst_unique_relevant_publishers",
                 "catalyst_low_signal_relevant_ratio",
             ]),
+            "catalyst_truth_distribution": {
+                "backed": sum(1 for row in ranked_rows if row.get("catalyst_support_level") == "backed"),
+                "supported": sum(1 for row in ranked_rows if row.get("catalyst_support_level") == "supported"),
+                "mixed": sum(1 for row in ranked_rows if row.get("catalyst_support_level") == "mixed"),
+                "weak": sum(1 for row in ranked_rows if row.get("catalyst_support_level") == "weak"),
+            },
             "examples": {
                 "missing_price_history_examples": prefilter_diagnostics.get("missing_price_history_examples", []),
             },
         }
 
         score_diagnostics = _score_diagnostics(ranked_rows, settings.shortlist_size)
+        score_diagnostics["catalyst_truth_distribution"] = coverage_diagnostics["catalyst_truth_distribution"]
+        score_diagnostics["opportunity_type_distribution"] = {
+            "catalyst_backed": sum(1 for row in ranked_rows if row.get("opportunity_type") == "Catalyst-backed opportunity"),
+            "catalyst_supported": sum(1 for row in ranked_rows if row.get("opportunity_type") == "Catalyst-supported opportunity"),
+            "quality_momentum": sum(1 for row in ranked_rows if row.get("opportunity_type") == "Quality/momentum opportunity"),
+        }
 
         scan_summary = {
             "run_id": run_id,
@@ -433,6 +458,9 @@ def _run_scan_thread(run_id: str) -> None:
                 "reason_codes": json.loads(row["reason_codes_json"]),
                 "risk_flags": json.loads(row["risk_flags_json"]),
                 "latest_news": json.loads(row["latest_news_json"]),
+                "catalyst_truth_label": row.get("catalyst_truth_label"),
+                "catalyst_support_level": row.get("catalyst_support_level"),
+                "opportunity_type": row.get("opportunity_type"),
             }
             for row in ranked_rows
         }
@@ -456,6 +484,8 @@ def _run_scan_thread(run_id: str) -> None:
                 "risk_flags": " | ".join(risk_flags) if risk_flags else "None identified",
                 "latest_news_titles": " | ".join(item.get("title", "") for item in latest_news[:3]) or "No relevant headlines retained",
                 "latest_news_publishers": " | ".join(item.get("publisher", "") for item in latest_news[:3]) or "No relevant publishers retained",
+                "catalyst_high_credibility_count": converted.get("catalyst_high_credibility_count", 0),
+                "catalyst_low_signal_ratio": converted.get("catalyst_low_signal_ratio", 0.0),
             }))
 
         write_json(run_dir / "scan_summary.json", scan_summary)

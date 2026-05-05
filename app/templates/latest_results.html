@@ -12,6 +12,7 @@
     <div>
       <a class="primary-btn" href="/download/run/{{ latest.run_id }}/scan-pack">Download scan pack</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/coverage_diagnostics.json">Coverage diagnostics</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/score_diagnostics.json">Score diagnostics</a>
     </div>
     {% endif %}
   </div>
@@ -38,6 +39,8 @@
           <th>Structural</th>
           <th>Catalyst</th>
           <th>Timing</th>
+          <th>Type</th>
+          <th>Catalyst truth</th>
           <th>Reasons</th>
           <th>Flags</th>
         </tr>
@@ -53,6 +56,8 @@
           <td>{{ '%.2f'|format(row.structural_score) }}</td>
           <td>{{ '%.2f'|format(row.catalyst_score) }}</td>
           <td>{{ '%.2f'|format(row.timing_score) }}</td>
+          <td>{{ row.opportunity_type }}</td>
+          <td>{{ row.catalyst_truth_label }}</td>
           <td>{{ (row.reason_codes or [])|join(', ') }}</td>
           <td>{{ (row.risk_flags or [])|join(', ') }}</td>
         </tr>
