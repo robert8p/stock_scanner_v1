@@ -12,6 +12,9 @@
     <div>
       <h1>News + Fundamentals + Technicals Stock Scanner</h1>
       <p class="subtle">Version 1 ranks opportunities. It does not claim calibrated probabilities.</p>
+      {% if build %}
+      <p class="build-line subtle">Build {{ build.app_version }} · {{ build.build_id }} · schema {{ build.artifact_schema_version }}</p>
+      {% endif %}
     </div>
     <nav>
       <a href="/scanner">Scanner</a>
@@ -24,5 +27,10 @@
   <main class="page-shell">
     {% block content %}{% endblock %}
   </main>
+  {% if build %}
+  <footer class="site-footer subtle">
+    Deployed build truth: {{ build.app_version }} · {{ build.build_id }} · built {{ build.build_timestamp_utc }} · artifact schema {{ build.artifact_schema_version }}
+  </footer>
+  {% endif %}
 </body>
 </html>

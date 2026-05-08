@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -18,6 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     app_name: str = os.getenv("APP_NAME", "news-fundamentals-technicals-stock-scanner")
     app_env: str = os.getenv("APP_ENV", "production")
+    app_version: str = os.getenv("APP_VERSION", "v1.6.0")
+    build_id: str = os.getenv("BUILD_ID", "v1.6.0-reliability")
+    build_timestamp_utc: str = os.getenv("BUILD_TIMESTAMP_UTC", datetime.now(timezone.utc).isoformat())
+    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-07-v1")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 
@@ -46,6 +51,16 @@ class AppSettings:
     yfinance_timeout_seconds: int = int(os.getenv("YFINANCE_TIMEOUT_SECONDS", "20"))
     requests_timeout_seconds: int = int(os.getenv("REQUESTS_TIMEOUT_SECONDS", "20"))
     yfinance_bulk_chunk_size: int = int(os.getenv("YFINANCE_BULK_CHUNK_SIZE", "100"))
+
+    stale_price_max_age_days: int = int(os.getenv("STALE_PRICE_MAX_AGE_DAYS", "3"))
+    stale_news_max_age_days: int = int(os.getenv("STALE_NEWS_MAX_AGE_DAYS", "7"))
+    min_core_feature_coverage_pct: float = float(os.getenv("MIN_CORE_FEATURE_COVERAGE_PCT", "70"))
+    min_price_history_coverage_pct: float = float(os.getenv("MIN_PRICE_HISTORY_COVERAGE_PCT", "90"))
+
+    outcome_target_up_pct: float = float(os.getenv("OUTCOME_TARGET_UP_PCT", "0.05"))
+    outcome_stop_down_pct: float = float(os.getenv("OUTCOME_STOP_DOWN_PCT", "0.03"))
+    outcome_horizon_days: int = int(os.getenv("OUTCOME_HORIZON_DAYS", "20"))
+    outcome_recheck_lookback_days: int = int(os.getenv("OUTCOME_RECHECK_LOOKBACK_DAYS", "80"))
 
     wikipedia_universe_url: str = os.getenv(
         "WIKIPEDIA_UNIVERSE_URL",

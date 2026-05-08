@@ -1,3 +1,5 @@
+const scanRequestKey = `scan-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 async function pollStatus() {
   try {
     const res = await fetch('/api/status');
@@ -6,9 +8,10 @@ async function pollStatus() {
     const feedback = document.getElementById('scan-feedback');
     const bar = document.getElementById('scan-progress-bar');
     const label = document.getElementById('scan-progress-label');
+    const build = data.build ? `${data.build.app_version} · ${data.build.build_id}` : '';
     if (feedback) {
       const latest = data.latest_run && data.latest_run.status ? ` Latest run: ${data.latest_run.status}.` : '';
-      feedback.textContent = `${data.phase || 'idle'} — ${data.message || 'Ready'}.${latest}`;
+      feedback.textContent = `${data.phase || 'idle'} — ${data.message || 'Ready'}.${latest}${build ? ` Build: ${build}.` : ''}`;
     }
     if (bar && label) {
       const total = data.progress_total || 0;
@@ -32,7 +35,14 @@ async function runScan() {
   if (btn) btn.disabled = true;
   if (feedback) feedback.textContent = 'Starting scan...';
   try {
-    const res = await fetch('/api/scan/run', { method: 'POST' });
+    const res = await fetch('/api/scan/run', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': scanRequestKey,
+      },
+      body: JSON.stringify({ request_key: scanRequestKey }),
+    });
     const body = await res.json();
     if (!res.ok) throw new Error(body.detail || 'Failed to start scan');
     if (feedback) feedback.textContent = `Scan started: ${body.run_id}`;

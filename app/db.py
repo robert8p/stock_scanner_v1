@@ -78,6 +78,10 @@ def init_db() -> None:
                 catalyst_support_level TEXT,
                 catalyst_high_credibility_count INTEGER,
                 catalyst_low_signal_ratio REAL,
+                evidence_completeness_pct REAL,
+                data_quality_label TEXT,
+                price_last_timestamp TEXT,
+                news_last_timestamp TEXT,
                 PRIMARY KEY (run_id, ticker)
             )
             """
@@ -95,6 +99,39 @@ def init_db() -> None:
             cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_high_credibility_count INTEGER")
         if "catalyst_low_signal_ratio" not in existing_candidate_cols:
             cur.execute("ALTER TABLE candidates ADD COLUMN catalyst_low_signal_ratio REAL")
+        if "evidence_completeness_pct" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN evidence_completeness_pct REAL")
+        if "data_quality_label" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN data_quality_label TEXT")
+        if "price_last_timestamp" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN price_last_timestamp TEXT")
+        if "news_last_timestamp" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN news_last_timestamp TEXT")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shortlist_outcomes (
+                run_id TEXT,
+                ticker TEXT,
+                company_name TEXT,
+                entry_date TEXT,
+                entry_price REAL,
+                target_up_pct REAL,
+                stop_down_pct REAL,
+                horizon_days INTEGER,
+                status TEXT,
+                evaluated_at TEXT,
+                days_elapsed INTEGER,
+                max_return_pct REAL,
+                min_return_pct REAL,
+                end_return_pct REAL,
+                hit_up_first INTEGER,
+                hit_down_first INTEGER,
+                outcome_note TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (run_id, ticker)
+            )
+            """
+        )
 
 
 def upsert_run(record: Dict[str, Any]) -> None:
@@ -106,6 +143,8 @@ def upsert_run(record: Dict[str, Any]) -> None:
         cur.execute(sql, [record[col] for col in columns])
 
 
+
+
 def replace_candidates(run_id: str, rows: Iterable[Dict[str, Any]]) -> None:
     with db_cursor() as cur:
         cur.execute("DELETE FROM candidates WHERE run_id = ?", (run_id,))
@@ -114,6 +153,51 @@ def replace_candidates(run_id: str, rows: Iterable[Dict[str, Any]]) -> None:
             placeholders = ", ".join(["?"] * len(columns))
             sql = f"INSERT INTO candidates ({', '.join(columns)}) VALUES ({placeholders})"
             cur.execute(sql, [row[col] for col in columns])
+
+
+def upsert_shortlist_outcomes(rows: Iterable[Dict[str, Any]]) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+    with db_cursor() as cur:
+        for row in rows:
+            columns = list(row.keys())
+            placeholders = ", ".join(["?"] * len(columns))
+            update_clause = ", ".join([f"{col}=excluded.{col}" for col in columns if col not in {"run_id", "ticker"}])
+            sql = f"INSERT INTO shortlist_outcomes ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(run_id, ticker) DO UPDATE SET {update_clause}"
+            cur.execute(sql, [row[col] for col in columns])
+
+
+def list_shortlist_outcomes(limit: int = 100, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    with db_cursor() as cur:
+        if status:
+            rows = cur.execute(
+                "SELECT * FROM shortlist_outcomes WHERE status = ? ORDER BY entry_date DESC, ticker ASC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = cur.execute(
+                "SELECT * FROM shortlist_outcomes ORDER BY entry_date DESC, ticker ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def summarize_shortlist_outcomes() -> Dict[str, Any]:
+    with db_cursor() as cur:
+        rows = cur.execute(
+            "SELECT status, COUNT(*) AS count FROM shortlist_outcomes GROUP BY status"
+        ).fetchall()
+    status_counts = {row["status"]: int(row["count"]) for row in rows}
+    total = sum(status_counts.values())
+    return {
+        "total": total,
+        "pending": status_counts.get("pending", 0),
+        "target_hit": status_counts.get("target_hit", 0),
+        "stop_hit": status_counts.get("stop_hit", 0),
+        "expired": status_counts.get("expired", 0),
+        "insufficient_data": status_counts.get("insufficient_data", 0),
+    }
 
 
 def get_latest_run() -> Optional[Dict[str, Any]]:

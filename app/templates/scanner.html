@@ -6,9 +6,6 @@
     <p>Run an on-demand scan across the configured S&amp;P 500 slice. The app combines structural, catalyst, and timing scores into an overall opportunity score.</p>
     <button id="run-scan-btn" class="primary-btn">Run Scan</button>
     <p class="subtle">Provider: {{ 'demo' if settings.demo_mode else settings.default_provider }} · Universe slice: {{ settings.scan_ticker_limit }} · Full enrichment cap: {{ settings.enrichment_limit }}</p>
-    {% if settings.default_universe_name == 'S&P 500' and settings.scan_ticker_limit < 500 %}
-    <p class="subtle">Configured breadth is narrower than the available S&amp;P 500 universe. Raise the scan cap in Settings for broader coverage.</p>
-    {% endif %}
     <div id="scan-feedback" class="status-box">Ready</div>
     <div class="progress-wrap">
       <div id="scan-progress-bar" class="progress-bar"></div>
@@ -16,11 +13,12 @@
     <p id="scan-progress-label" class="subtle">No active scan.</p>
   </div>
   <div class="card emphasis">
-    <h2>Output semantics</h2>
+    <h2>Operational truth controls</h2>
     <ul>
-      <li>Opportunity Score = ranked composite score, not a probability.</li>
-      <li>Confidence band = descriptive label from score logic only.</li>
-      <li>Historical calibration arrives in Version 2.</li>
+      <li>Build/version truth is surfaced in the UI and health outputs.</li>
+      <li>Artifact integrity is enforced before a run is marked complete.</li>
+      <li>Runs now degrade honestly when coverage or freshness is thin.</li>
+      <li>Shortlist outcomes are tracked forward using the +5% / -3% / 20-day rule.</li>
     </ul>
   </div>
 </section>
@@ -39,34 +37,38 @@
     <div class="metric-card"><span>Price history coverage</span><strong>{{ latest.summary.price_history_available_count or latest.summary.enrichment_size }}</strong></div>
     <div class="metric-card"><span>Enriched</span><strong>{{ latest.summary.enrichment_size }}</strong></div>
     <div class="metric-card"><span>Ranked after dedupe</span><strong>{{ latest.summary.deduped_candidate_count }}</strong></div>
+    <div class="metric-card"><span>Shortlist tracked</span><strong>{{ latest.outcome_tracking_summary.pending or 0 }}</strong></div>
   </div>
+  {% if latest.summary.degradation_summary and latest.summary.degradation_summary.degraded %}
+  <div class="alert-box bad">
+    <strong>Degraded run:</strong> {{ latest.summary.degradation_summary.issues | join(' · ') }}
+  </div>
+  {% endif %}
   {% endif %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Rank</th>
+          <th>View rank</th>
+          <th>Score rank</th>
           <th>Ticker</th>
           <th>Company</th>
           <th>Overall</th>
-          <th>Structural</th>
-          <th>Catalyst</th>
-          <th>Timing</th>
-          <th>Confidence band</th>
+          <th>Catalyst truth</th>
+          <th>Evidence</th>
           <th>Detail</th>
         </tr>
       </thead>
       <tbody>
         {% for row in latest.candidates[:settings.shortlist_size] %}
         <tr>
-          <td>{{ row.rank }}</td>
+          <td>{{ row.view_rank }}</td>
+          <td>{{ row.score_rank }}</td>
           <td><strong>{{ row.ticker }}</strong></td>
           <td>{{ row.company_name }}</td>
           <td>{{ '%.2f'|format(row.overall_score) }}</td>
-          <td>{{ '%.2f'|format(row.structural_score) }}</td>
-          <td>{{ '%.2f'|format(row.catalyst_score) }}</td>
-          <td>{{ '%.2f'|format(row.timing_score) }}</td>
-          <td>{{ row.confidence_band }}</td>
+          <td>{{ row.catalyst_truth_label }}</td>
+          <td>{{ row.data_quality_label }} ({{ row.evidence_completeness_pct }}%)</td>
           <td><a href="/candidate/{{ row.ticker }}?run_id={{ latest.run_id }}">Open</a></td>
         </tr>
         {% endfor %}

@@ -1,21 +1,62 @@
 {% extends "base.html" %}
+
+{% macro candidate_table(rows, latest) %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>View rank</th>
+        <th>Score rank</th>
+        <th>Ticker</th>
+        <th>Company</th>
+        <th>Overall</th>
+        <th>Type</th>
+        <th>Catalyst truth</th>
+        <th>Evidence</th>
+        <th>Reasons</th>
+        <th>Flags</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.view_rank }}</td>
+        <td>{{ row.score_rank }}</td>
+        <td><a href="/candidate/{{ row.ticker }}?run_id={{ latest.run_id }}">{{ row.ticker }}</a></td>
+        <td>{{ row.company_name }}</td>
+        <td>{{ '%.2f'|format(row.overall_score) }}</td>
+        <td>{{ row.opportunity_type }}</td>
+        <td><span class="badge {{ row.catalyst_support_level or 'weak' }}">{{ row.catalyst_truth_label }}</span></td>
+        <td>{{ row.data_quality_label }} ({{ row.evidence_completeness_pct }}%)</td>
+        <td>{{ (row.reason_codes or [])|join(', ') }}</td>
+        <td>{{ (row.risk_flags or [])|join(', ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
 {% block content %}
 <section class="card">
   <div class="section-head">
     <div>
       <h2>Latest Results</h2>
       {% if latest %}
-      <p class="subtle">Run {{ latest.run_id }} · {{ latest.status }} · Universe {{ latest.universe_size }} · Enriched {{ latest.enrichment_size }}</p>
+      <p class="subtle">Run {{ latest.run_id }} · {{ latest.status }} · Universe {{ latest.universe_size }} · Enriched {{ latest.enrichment_size }} · Showing {{ latest.sort_label }}</p>
       {% endif %}
     </div>
     {% if latest %}
-    <div>
+    <div class="button-row">
       <a class="primary-btn" href="/download/run/{{ latest.run_id }}/scan-pack">Download scan pack</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/coverage_diagnostics.json">Coverage diagnostics</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/score_diagnostics.json">Score diagnostics</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/shortlist_views.json">Shortlist views</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/outcome_tracking_summary.json">Outcome tracking</a>
     </div>
     {% endif %}
   </div>
+
   {% if latest and latest.summary %}
   <div class="metric-grid">
     <div class="metric-card"><span>Universe available</span><strong>{{ latest.summary.universe_available or latest.summary.universe_size_loaded }}</strong></div>
@@ -24,49 +65,63 @@
     <div class="metric-card"><span>Enriched</span><strong>{{ latest.summary.enrichment_size }}</strong></div>
     <div class="metric-card"><span>Ranked</span><strong>{{ latest.summary.deduped_candidate_count }}</strong></div>
     <div class="metric-card"><span>Shortlist</span><strong>{{ latest.summary.shortlist_size }}</strong></div>
+    <div class="metric-card"><span>Pending outcomes</span><strong>{{ latest.outcome_tracking_summary.pending }}</strong></div>
+    <div class="metric-card"><span>Target hits</span><strong>{{ latest.outcome_tracking_summary.target_hit }}</strong></div>
+    <div class="metric-card"><span>Stop hits</span><strong>{{ latest.outcome_tracking_summary.stop_hit }}</strong></div>
+    <div class="metric-card"><span>Expired</span><strong>{{ latest.outcome_tracking_summary.expired }}</strong></div>
   </div>
-  {% endif %}
-  {% if latest and latest.candidates %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Rank</th>
-          <th>Ticker</th>
-          <th>Company</th>
-          <th>Sector</th>
-          <th>Overall</th>
-          <th>Structural</th>
-          <th>Catalyst</th>
-          <th>Timing</th>
-          <th>Type</th>
-          <th>Catalyst truth</th>
-          <th>Reasons</th>
-          <th>Flags</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in latest.candidates %}
-        <tr>
-          <td>{{ row.rank }}</td>
-          <td><a href="/candidate/{{ row.ticker }}?run_id={{ latest.run_id }}">{{ row.ticker }}</a></td>
-          <td>{{ row.company_name }}</td>
-          <td>{{ row.sector }}</td>
-          <td>{{ '%.2f'|format(row.overall_score) }}</td>
-          <td>{{ '%.2f'|format(row.structural_score) }}</td>
-          <td>{{ '%.2f'|format(row.catalyst_score) }}</td>
-          <td>{{ '%.2f'|format(row.timing_score) }}</td>
-          <td>{{ row.opportunity_type }}</td>
-          <td>{{ row.catalyst_truth_label }}</td>
-          <td>{{ (row.reason_codes or [])|join(', ') }}</td>
-          <td>{{ (row.risk_flags or [])|join(', ') }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  {% if latest.summary.degradation_summary and latest.summary.degradation_summary.degraded %}
+  <div class="alert-box bad">
+    <strong>Degraded run:</strong> {{ latest.summary.degradation_summary.issues | join(' · ') }}
   </div>
   {% else %}
-  <p>No completed scan available yet.</p>
+  <div class="alert-box">
+    <strong>Reliability state:</strong> Latest run passed the current degradation checks.
+  </div>
   {% endif %}
+  {% endif %}
+
+  <div class="sort-toggle-row">
+    {% for option in sort_options %}
+      {% if option.value == sort_mode %}
+      <a class="toggle-btn active" href="/latest-results?sort_mode={{ option.value }}">{{ option.label }}</a>
+      {% else %}
+      <a class="toggle-btn" href="/latest-results?sort_mode={{ option.value }}">{{ option.label }}</a>
+      {% endif %}
+    {% endfor %}
+  </div>
 </section>
+
+{% if latest and latest.candidates %}
+  {% if sort_mode == 'score' %}
+  <section class="card">
+    <div class="section-head">
+      <div>
+        <h3>All ranked candidates</h3>
+        <p class="subtle">Flat score-ranked order across all opportunity types.</p>
+      </div>
+    </div>
+    {{ candidate_table(latest.candidates, latest) }}
+  </section>
+  {% else %}
+    {% for group in latest.candidate_groups %}
+      {% if group.rows %}
+      <section class="card group-card">
+        <div class="section-head">
+          <div>
+            <h3>{{ group.label }}</h3>
+            <p class="subtle">{{ group.description }}</p>
+          </div>
+          <div class="group-count">{{ group.count }} names</div>
+        </div>
+        {{ candidate_table(group.rows, latest) }}
+      </section>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+{% else %}
+<section class="card">
+  <p>No completed scan available yet.</p>
+</section>
+{% endif %}
 {% endblock %}

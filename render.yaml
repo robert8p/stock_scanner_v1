@@ -14,6 +14,14 @@ services:
         value: 3.12.9
       - key: APP_ENV
         value: production
+      - key: APP_VERSION
+        value: v1.6.0
+      - key: BUILD_ID
+        value: v1.6.0-reliability
+      - key: BUILD_TIMESTAMP_UTC
+        value: 2026-05-07T23:00:00+00:00
+      - key: ARTIFACT_SCHEMA_VERSION
+        value: 2026-05-07-v1
       - key: DATA_DIR
         value: /var/data
       - key: DATABASE_PATH
@@ -50,3 +58,20 @@ services:
         value: 0.35
       - key: YFINANCE_BULK_CHUNK_SIZE
         value: 100
+
+      - key: STALE_PRICE_MAX_AGE_DAYS
+        value: 3
+      - key: STALE_NEWS_MAX_AGE_DAYS
+        value: 7
+      - key: MIN_CORE_FEATURE_COVERAGE_PCT
+        value: 70
+      - key: MIN_PRICE_HISTORY_COVERAGE_PCT
+        value: 90
+      - key: OUTCOME_TARGET_UP_PCT
+        value: 0.05
+      - key: OUTCOME_STOP_DOWN_PCT
+        value: 0.03
+      - key: OUTCOME_HORIZON_DAYS
+        value: 20
+      - key: OUTCOME_RECHECK_LOOKBACK_DAYS
+        value: 80

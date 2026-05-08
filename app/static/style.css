@@ -147,3 +147,98 @@ ul { padding-left: 1.1rem; }
   .site-header { padding: 1rem 1rem 1.2rem; flex-direction: column; }
   .page-shell { padding: 1rem; }
 }
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+.sort-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 1rem 0 0.6rem;
+}
+.toggle-btn {
+  display: inline-block;
+  padding: 0.72rem 0.95rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+  color: var(--text);
+  font-weight: 700;
+}
+.toggle-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.toggle-btn:hover {
+  text-decoration: none;
+  filter: brightness(1.05);
+}
+.badge {
+  display: inline-block;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge.backed {
+  background: rgba(31, 198, 122, 0.14);
+  color: #7ff0b6;
+  border-color: rgba(31, 198, 122, 0.28);
+}
+.badge.supported {
+  background: rgba(102, 194, 255, 0.14);
+  color: #9edcff;
+  border-color: rgba(102, 194, 255, 0.28);
+}
+.badge.mixed {
+  background: rgba(245, 185, 66, 0.12);
+  color: #ffd27a;
+  border-color: rgba(245, 185, 66, 0.22);
+}
+.badge.weak {
+  background: rgba(255, 122, 122, 0.12);
+  color: #ffb3b3;
+  border-color: rgba(255, 122, 122, 0.22);
+}
+.group-card h3 {
+  margin: 0 0 0.25rem;
+}
+.group-count {
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 700;
+}
+.compact-note {
+  margin-top: 0.9rem;
+}
+
+.build-line { margin: 0.25rem 0 0; font-size: 0.82rem; }
+.site-footer {
+  max-width: 1400px;
+  margin: 0 auto 2rem;
+  padding: 0 2rem;
+  font-size: 0.85rem;
+}
+.alert-box {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(245, 185, 66, 0.25);
+  background: rgba(245, 185, 66, 0.08);
+}
+.alert-box.bad {
+  border-color: rgba(255, 122, 122, 0.3);
+  background: rgba(255, 122, 122, 0.08);
+}
+.integrity-pass { color: #7ff0b6; }
+.integrity-fail { color: #ffb3b3; }
+.small-table td, .small-table th { font-size: 0.86rem; padding: 0.55rem 0.6rem; }

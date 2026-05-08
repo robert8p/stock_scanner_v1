@@ -11,6 +11,54 @@
       <a class="link-btn" href="/download/status">Download status</a>
     </div>
   </div>
+  <div class="metric-grid">
+    <div class="metric-card"><span>Build</span><strong>{{ build.app_version }}</strong></div>
+    <div class="metric-card"><span>Build ID</span><strong>{{ build.build_id }}</strong></div>
+    <div class="metric-card"><span>Schema</span><strong>{{ build.artifact_schema_version }}</strong></div>
+    <div class="metric-card"><span>Pending outcomes</span><strong>{{ runtime_status.outcome_tracking_summary.pending }}</strong></div>
+    <div class="metric-card"><span>Target hits</span><strong>{{ runtime_status.outcome_tracking_summary.target_hit }}</strong></div>
+    <div class="metric-card"><span>Stop hits</span><strong>{{ runtime_status.outcome_tracking_summary.stop_hit }}</strong></div>
+  </div>
+</section>
+
+<section class="hero-grid">
+  <div class="card">
+    <h2>Artifact integrity</h2>
+    <p class="{% if artifact_integrity.status == 'pass' %}integrity-pass{% else %}integrity-fail{% endif %}">
+      <strong>Status:</strong> {{ artifact_integrity.status }}
+    </p>
+    {% if artifact_integrity.issues %}
+    <ul>
+      {% for issue in artifact_integrity.issues %}
+      <li>{{ issue }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if artifact_integrity.artifacts_present %}
+    <p class="subtle">Last pack contents: {{ artifact_integrity.artifacts_present | join(', ') }}</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>Recent outcome tracking</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead>
+          <tr><th>Run</th><th>Ticker</th><th>Status</th><th>Days</th><th>End return</th></tr>
+        </thead>
+        <tbody>
+          {% for row in recent_outcomes[:12] %}
+          <tr>
+            <td>{{ row.run_id }}</td>
+            <td>{{ row.ticker }}</td>
+            <td>{{ row.status }}</td>
+            <td>{{ row.days_elapsed }}</td>
+            <td>{{ row.end_return_pct }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
 </section>
 
 <section class="hero-grid">
