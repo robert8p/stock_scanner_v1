@@ -13,7 +13,7 @@ from uuid import uuid4
 import pandas as pd
 
 from .config import load_settings
-from .db import deserialize_candidate, deserialize_run, list_candidates, list_runs, replace_candidates, upsert_run, upsert_shortlist_outcomes, list_shortlist_outcomes, summarize_shortlist_outcomes
+from .db import deserialize_candidate, deserialize_run, init_db, list_candidates, list_runs, replace_candidates, upsert_run, upsert_shortlist_outcomes, list_shortlist_outcomes, summarize_shortlist_outcomes
 from .providers import get_provider
 from .providers.base import TickerDataBundle
 from .scoring import SECTOR_ETF_MAP, compute_timing_metrics, confidence_band, normalize_sector_name, score_catalyst, score_structural, score_timing
@@ -69,6 +69,7 @@ def _sanitize_run_for_status(run: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_runtime_status() -> Dict[str, Any]:
+    init_db()
     settings = load_settings()
     with STATUS_LOCK:
         status = dict(SCAN_STATUS)
@@ -350,6 +351,39 @@ def _run_degradation_assessment(feature_rows: List[Dict[str, Any]], coverage: Di
     }
 
 
+SORT_MODE_LABELS = {
+    "score": "All ranked (score order)",
+    "catalyst_first": "Catalyst-backed first",
+    "quality_first": "Quality/momentum first",
+}
+SHORTLIST_DEFAULT_SORT_MODE = "catalyst_first"
+
+SUPPORT_LEVEL_LABELS = {
+    "backed": "Catalyst-backed",
+    "supported": "Catalyst-supported",
+    "mixed": "Quality/momentum · mixed catalyst",
+    "weak": "Quality/momentum · weak catalyst",
+}
+
+
+def normalize_sort_mode(sort_mode: str | None) -> str:
+    candidate = (sort_mode or "catalyst_first").strip().lower().replace("-", "_")
+    return candidate if candidate in SORT_MODE_LABELS else SHORTLIST_DEFAULT_SORT_MODE
+
+
+def _support_priority(sort_mode: str) -> Dict[str, int]:
+    if sort_mode == "quality_first":
+        return {"mixed": 0, "weak": 1, "supported": 2, "backed": 3}
+    if sort_mode == "score":
+        return {"backed": 0, "supported": 1, "mixed": 2, "weak": 3}
+    return {"backed": 0, "supported": 1, "mixed": 2, "weak": 3}
+
+
+def _candidate_view_bucket(row: Dict[str, Any]) -> str:
+    support_level = str(row.get("catalyst_support_level") or "weak")
+    return SUPPORT_LEVEL_LABELS.get(support_level, SUPPORT_LEVEL_LABELS["weak"])
+
+
 def _serialize_candidate_row(row: Dict[str, Any], sort_mode: str = 'catalyst_first', view_rank: Optional[int] = None) -> Dict[str, Any]:
     source = deserialize_candidate(dict(row)) if any(key.endswith('_json') for key in row.keys()) else dict(row)
     ticker = source.get('ticker')
@@ -454,6 +488,24 @@ def _build_outcome_rows(shortlist_rows: List[Dict[str, Any]], bundle_map: Dict[s
     return rows
 
 
+def _filter_forward_frame(frame: pd.DataFrame, entry_dt: datetime) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return frame
+    entry_ts = pd.Timestamp(entry_dt)
+    index = frame.index
+    index_tz = getattr(index, 'tz', None)
+    entry_tz = getattr(entry_ts, 'tzinfo', None)
+
+    if index_tz is None and entry_tz is not None:
+        entry_ts = entry_ts.tz_localize(None)
+    elif index_tz is not None and entry_tz is None:
+        entry_ts = entry_ts.tz_localize(index_tz)
+    elif index_tz is not None and entry_tz is not None:
+        entry_ts = entry_ts.tz_convert(index_tz)
+
+    return frame[index > entry_ts]
+
+
 def _evaluate_outcomes(provider, settings) -> Dict[str, Any]:
     pending = list_shortlist_outcomes(limit=200, status='pending')
     if not pending:
@@ -461,110 +513,86 @@ def _evaluate_outcomes(provider, settings) -> Dict[str, Any]:
     rows_to_update = []
     now = datetime.now(timezone.utc)
     for row in pending:
-        entry_dt = _parse_dt(row.get('entry_date'))
-        entry_price = row.get('entry_price')
-        if not entry_dt or not entry_price:
+        try:
+            entry_dt = _parse_dt(row.get('entry_date'))
+            entry_price = row.get('entry_price')
+            if not entry_dt or not entry_price:
+                row.update({
+                    'status': 'insufficient_data',
+                    'evaluated_at': utc_now_iso(),
+                    'outcome_note': 'Missing entry timestamp or price',
+                    'updated_at': utc_now_iso(),
+                })
+                rows_to_update.append(row)
+                continue
+            horizon_end = entry_dt + timedelta(days=int(row.get('horizon_days') or settings.outcome_horizon_days) + 5)
+            lookback_days = max(settings.outcome_recheck_lookback_days, int((now - entry_dt).days) + 5)
+            frame = provider.fetch_bulk_price_history([row['ticker']], lookback_days).get(row['ticker'])
+            if frame is None or frame.empty:
+                row.update({'evaluated_at': utc_now_iso(), 'outcome_note': 'Price history unavailable for evaluation', 'updated_at': utc_now_iso()})
+                rows_to_update.append(row)
+                continue
+            frame = _filter_forward_frame(frame, entry_dt)
+            if frame.empty:
+                if now >= horizon_end:
+                    row.update({'status': 'insufficient_data', 'evaluated_at': utc_now_iso(), 'outcome_note': 'No forward price rows available by horizon end', 'updated_at': utc_now_iso()})
+                else:
+                    row.update({'status': 'pending', 'evaluated_at': utc_now_iso(), 'outcome_note': 'Awaiting first forward price row', 'updated_at': utc_now_iso()})
+                rows_to_update.append(row)
+                continue
+            max_return_pct = float((frame['High'].max() / entry_price) - 1.0)
+            min_return_pct = float((frame['Low'].min() / entry_price) - 1.0)
+            end_return_pct = float((frame['Close'].iloc[-1] / entry_price) - 1.0)
+            target = float(row.get('target_up_pct') or settings.outcome_target_up_pct)
+            stop = float(row.get('stop_down_pct') or settings.outcome_stop_down_pct)
+            hit_up_idx = None
+            hit_down_idx = None
+            for idx, candle in frame.iterrows():
+                if hit_up_idx is None and float(candle['High']) >= entry_price * (1 + target):
+                    hit_up_idx = idx
+                if hit_down_idx is None and float(candle['Low']) <= entry_price * (1 - stop):
+                    hit_down_idx = idx
+                if hit_up_idx is not None and hit_down_idx is not None:
+                    break
+            days_elapsed = max(int((min(now, horizon_end) - entry_dt).days), 0)
+            status = 'pending'
+            note = 'Awaiting more forward data'
+            hit_up_first = 0
+            hit_down_first = 0
+            if hit_up_idx is not None and (hit_down_idx is None or hit_up_idx <= hit_down_idx):
+                status = 'target_hit'
+                note = 'Touched +5% before -3%'
+                hit_up_first = 1
+            elif hit_down_idx is not None and (hit_up_idx is None or hit_down_idx < hit_up_idx):
+                status = 'stop_hit'
+                note = 'Touched -3% before +5%'
+                hit_down_first = 1
+            elif now >= horizon_end:
+                status = 'expired'
+                note = 'Reached horizon without touching target or stop first'
             row.update({
-                'status': 'insufficient_data',
+                'status': status,
                 'evaluated_at': utc_now_iso(),
-                'outcome_note': 'Missing entry timestamp or price',
+                'days_elapsed': days_elapsed,
+                'max_return_pct': round(max_return_pct, 4),
+                'min_return_pct': round(min_return_pct, 4),
+                'end_return_pct': round(end_return_pct, 4),
+                'hit_up_first': hit_up_first,
+                'hit_down_first': hit_down_first,
+                'outcome_note': note,
                 'updated_at': utc_now_iso(),
             })
             rows_to_update.append(row)
-            continue
-        horizon_end = entry_dt + timedelta(days=int(row.get('horizon_days') or settings.outcome_horizon_days) + 5)
-        lookback_days = max(settings.outcome_recheck_lookback_days, int((now - entry_dt).days) + 5)
-        frame = provider.fetch_bulk_price_history([row['ticker']], lookback_days).get(row['ticker'])
-        if frame is None or frame.empty:
-            row.update({'evaluated_at': utc_now_iso(), 'outcome_note': 'Price history unavailable for evaluation', 'updated_at': utc_now_iso()})
+        except Exception as exc:
+            row.update({
+                'status': 'pending',
+                'evaluated_at': utc_now_iso(),
+                'outcome_note': f'Outcome evaluation deferred: {exc}',
+                'updated_at': utc_now_iso(),
+            })
             rows_to_update.append(row)
-            continue
-        frame = frame[frame.index > pd.Timestamp(entry_dt)]
-        if frame.empty:
-            if now >= horizon_end:
-                row.update({'status': 'insufficient_data', 'evaluated_at': utc_now_iso(), 'outcome_note': 'No forward price rows available by horizon end', 'updated_at': utc_now_iso()})
-            else:
-                row.update({'status': 'pending', 'evaluated_at': utc_now_iso(), 'outcome_note': 'Awaiting first forward price row', 'updated_at': utc_now_iso()})
-            rows_to_update.append(row)
-            continue
-        max_return_pct = float((frame['High'].max() / entry_price) - 1.0)
-        min_return_pct = float((frame['Low'].min() / entry_price) - 1.0)
-        end_return_pct = float((frame['Close'].iloc[-1] / entry_price) - 1.0)
-        target = float(row.get('target_up_pct') or settings.outcome_target_up_pct)
-        stop = float(row.get('stop_down_pct') or settings.outcome_stop_down_pct)
-        hit_up_idx = None
-        hit_down_idx = None
-        for idx, candle in frame.iterrows():
-            if hit_up_idx is None and float(candle['High']) >= entry_price * (1 + target):
-                hit_up_idx = idx
-            if hit_down_idx is None and float(candle['Low']) <= entry_price * (1 - stop):
-                hit_down_idx = idx
-            if hit_up_idx is not None and hit_down_idx is not None:
-                break
-        days_elapsed = max(int((min(now, horizon_end) - entry_dt).days), 0)
-        status = 'pending'
-        note = 'Awaiting more forward data'
-        hit_up_first = 0
-        hit_down_first = 0
-        if hit_up_idx is not None and (hit_down_idx is None or hit_up_idx <= hit_down_idx):
-            status = 'target_hit'
-            note = 'Touched +5% before -3%'
-            hit_up_first = 1
-        elif hit_down_idx is not None and (hit_up_idx is None or hit_down_idx < hit_up_idx):
-            status = 'stop_hit'
-            note = 'Touched -3% before +5%'
-            hit_down_first = 1
-        elif now >= horizon_end:
-            status = 'expired'
-            note = 'Reached horizon without touching target or stop first'
-        row.update({
-            'status': status,
-            'evaluated_at': utc_now_iso(),
-            'days_elapsed': days_elapsed,
-            'max_return_pct': round(max_return_pct, 4),
-            'min_return_pct': round(min_return_pct, 4),
-            'end_return_pct': round(end_return_pct, 4),
-            'hit_up_first': hit_up_first,
-            'hit_down_first': hit_down_first,
-            'outcome_note': note,
-            'updated_at': utc_now_iso(),
-        })
-        rows_to_update.append(row)
     upsert_shortlist_outcomes(rows_to_update)
     return summarize_shortlist_outcomes()
-
-
-SORT_MODE_LABELS = {
-    "score": "All ranked (score order)",
-    "catalyst_first": "Catalyst-backed first",
-    "quality_first": "Quality/momentum first",
-}
-SHORTLIST_DEFAULT_SORT_MODE = "catalyst_first"
-
-SUPPORT_LEVEL_LABELS = {
-    "backed": "Catalyst-backed",
-    "supported": "Catalyst-supported",
-    "mixed": "Quality/momentum · mixed catalyst",
-    "weak": "Quality/momentum · weak catalyst",
-}
-
-
-def normalize_sort_mode(sort_mode: str | None) -> str:
-    candidate = (sort_mode or "catalyst_first").strip().lower().replace("-", "_")
-    return candidate if candidate in SORT_MODE_LABELS else SHORTLIST_DEFAULT_SORT_MODE
-
-
-def _support_priority(sort_mode: str) -> Dict[str, int]:
-    if sort_mode == "quality_first":
-        return {"mixed": 0, "weak": 1, "supported": 2, "backed": 3}
-    if sort_mode == "score":
-        return {"backed": 0, "supported": 1, "mixed": 2, "weak": 3}
-    return {"backed": 0, "supported": 1, "mixed": 2, "weak": 3}
-
-
-def _candidate_view_bucket(row: Dict[str, Any]) -> str:
-    support_level = str(row.get("catalyst_support_level") or "weak")
-    return SUPPORT_LEVEL_LABELS.get(support_level, SUPPORT_LEVEL_LABELS["weak"])
 
 
 def _sort_rows_for_view(rows: List[Dict[str, Any]], sort_mode: str) -> List[Dict[str, Any]]:
