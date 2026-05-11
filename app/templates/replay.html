@@ -3,7 +3,7 @@
 <section class="hero-grid">
   <div class="card">
     <h2>Replay / Calibration</h2>
-    <p>Run a historical replay over daily snapshots to test whether higher-ranked names outperform lower-ranked names. This build uses an honest timing-only replay mode because point-in-time fundamentals and news are not yet available from the current provider stack.</p>
+    <p>Run a historical replay over daily snapshots to test whether higher-ranked names outperform lower-ranked names. This build still uses an honest timing-only replay boundary, but V2.1 hardens discrimination with context-adjusted timing replay, regime slicing, and explicit monotonicity gates.</p>
     <button id="run-replay-btn" class="primary-btn">Run Replay</button>
     <p class="subtle">Replay mode: {{ settings.replay_default_mode }} · Universe cap: {{ settings.replay_ticker_limit }} · Max snapshots: {{ settings.replay_max_snapshots }} · Horizon: {{ settings.outcome_horizon_days }} trading days</p>
     <div id="replay-feedback" class="status-box">Ready</div>
@@ -13,10 +13,10 @@
   <div class="card emphasis">
     <h2>Calibration truth boundary</h2>
     <ul>
-      <li>This V2 build creates replay and calibration artifacts.</li>
-      <li>It does not yet authorize live probability labels for the full composite score.</li>
+      <li>This V2.1 build strengthens replay validation.</li>
+      <li>It still does not authorize live probability labels for the full composite score.</li>
       <li>Probability display stays disabled until replay parity includes point-in-time structural and catalyst inputs.</li>
-      <li>Use the validation pack to judge whether ranking quality improves with score.</li>
+      <li>Use the discrimination report to judge whether ranking quality improves with score.</li>
     </ul>
   </div>
 </section>
@@ -26,13 +26,15 @@
   <div class="section-head">
     <div>
       <h2>Latest replay</h2>
-      <p class="subtle">Replay {{ latest_replay.replay_id }} · {{ latest_replay.status }} · Mode {{ latest_replay.replay_mode }}</p>
+      <p class="subtle">Replay {{ latest_replay.replay_id }} · {{ latest_replay.status }} · Mode {{ latest_replay.replay_mode }} · Surface {{ latest_replay.summary.replay_surface }}</p>
     </div>
     <div class="button-row">
       <a class="primary-btn" href="/download/replay/{{ latest_replay.replay_id }}/validation-pack">Download validation pack</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_summary.json">Summary</a>
-      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/calibration_table.csv">Calibration</a>
-      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/score_band_metrics.csv">Score bands</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/discrimination_report.json">Discrimination</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/monotonicity_diagnostics.json">Monotonicity</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/quantile_lift_table.csv">Quantiles</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/regime_slice_metrics.csv">Regimes</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_parity_assessment.json">Parity</a>
     </div>
   </div>
@@ -43,16 +45,39 @@
     <div class="metric-card"><span>Observations</span><strong>{{ latest_replay.summary.observation_count }}</strong></div>
     <div class="metric-card"><span>Shortlist obs</span><strong>{{ latest_replay.summary.shortlist_observation_count }}</strong></div>
     <div class="metric-card"><span>Parity</span><strong>{{ latest_replay.summary.validation.parity_status }}</strong></div>
-    <div class="metric-card"><span>Eligible for live probabilities</span><strong>{{ 'yes' if latest_replay.summary.validation.eligible_for_probability_display else 'no' }}</strong></div>
-    <div class="metric-card"><span>Brier</span><strong>{{ latest_replay.summary.validation.brier_score }}</strong></div>
+    <div class="metric-card"><span>Discrimination</span><strong>{{ latest_replay.summary.validation.discrimination_validation_status }}</strong></div>
+    <div class="metric-card"><span>Spearman</span><strong>{{ latest_replay.summary.validation.score_outcome_spearman }}</strong></div>
+    <div class="metric-card"><span>Top decile lift</span><strong>{{ latest_replay.summary.validation.top_decile_lift }}</strong></div>
+    <div class="metric-card"><span>Monotonicity violations</span><strong>{{ latest_replay.summary.validation.score_band_monotonicity_violations }}</strong></div>
+  </div>
+  <div class="alert-box {% if latest_replay.summary.validation.discrimination_validation_status == 'pass' %}good{% else %}bad{% endif %}">
+    <strong>Discrimination decision:</strong> {{ latest_replay.summary.validation.discrimination_validation_reason }}
   </div>
   <div class="alert-box {% if latest_replay.summary.validation.eligible_for_probability_display %}good{% else %}bad{% endif %}">
-    <strong>Calibration decision:</strong> {{ latest_replay.summary.validation.eligibility_reason }}
+    <strong>Probability display:</strong> {{ latest_replay.summary.validation.eligibility_reason }}
   </div>
   {% endif %}
 </section>
 
 <section class="hero-grid">
+  <div class="card">
+    <h2>Discrimination gates</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Gate</th><th>Passed</th><th>Value</th><th>Threshold</th></tr></thead>
+        <tbody>
+          {% for gate_name, gate in latest_replay.discrimination_report.gates.items() %}
+          <tr>
+            <td>{{ gate_name }}</td>
+            <td>{{ 'yes' if gate.passed else 'no' }}</td>
+            <td>{{ gate.value if gate.value is defined else gate.violations }}</td>
+            <td>{{ gate.minimum if gate.minimum is defined else gate.maximum }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
   <div class="card">
     <h2>Top vs rest</h2>
     <div class="table-wrap">
@@ -65,6 +90,66 @@
             <td>{{ row.observations }}</td>
             <td>{{ row.hit_rate }}</td>
             <td>{{ row.lift_vs_all }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="hero-grid">
+  <div class="card">
+    <h2>Score quantiles</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Quantile</th><th>Obs</th><th>Hit rate</th><th>Lift</th><th>Avg score</th></tr></thead>
+        <tbody>
+          {% for row in latest_replay.quantile_lift_table[:10] %}
+          <tr>
+            <td>{{ row.quantile }}</td>
+            <td>{{ row.observations }}</td>
+            <td>{{ row.hit_rate }}</td>
+            <td>{{ row.lift_vs_all }}</td>
+            <td>{{ row.avg_score }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Regime slices</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Regime</th><th>Obs</th><th>Hit rate</th><th>Top decile lift</th></tr></thead>
+        <tbody>
+          {% for row in latest_replay.regime_slice_metrics[:10] %}
+          <tr>
+            <td>{{ row.market_regime }}</td>
+            <td>{{ row.observations }}</td>
+            <td>{{ row.hit_rate }}</td>
+            <td>{{ row.top_decile_lift }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="hero-grid">
+  <div class="card">
+    <h2>Monotonicity diagnostics</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Band</th><th>Obs</th><th>Hit rate</th></tr></thead>
+        <tbody>
+          {% for row in latest_replay.monotonicity_diagnostics.score_band_hit_rates[:10] %}
+          <tr>
+            <td>{{ row.score_band }}</td>
+            <td>{{ row.observations }}</td>
+            <td>{{ row.hit_rate }}</td>
           </tr>
           {% endfor %}
         </tbody>

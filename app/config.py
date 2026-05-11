@@ -19,10 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     app_name: str = os.getenv("APP_NAME", "news-fundamentals-technicals-stock-scanner")
     app_env: str = os.getenv("APP_ENV", "production")
-    app_version: str = os.getenv("APP_VERSION", "v2.0.0")
-    build_id: str = os.getenv("BUILD_ID", "v2.0.0-replay-calibration")
+    app_version: str = os.getenv("APP_VERSION", "v2.1.0")
+    build_id: str = os.getenv("BUILD_ID", "v2.1.0-replay-discrimination-hardening")
     build_timestamp_utc: str = os.getenv("BUILD_TIMESTAMP_UTC", datetime.now(timezone.utc).isoformat())
-    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-10-v2")
+    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-11-v2.1")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 
@@ -62,6 +62,12 @@ class AppSettings:
     replay_default_mode: str = os.getenv("REPLAY_DEFAULT_MODE", "timing_only")
     calibration_min_observations: int = int(os.getenv("CALIBRATION_MIN_OBSERVATIONS", "250"))
     calibration_min_band_size: int = int(os.getenv("CALIBRATION_MIN_BAND_SIZE", "25"))
+    replay_monotonicity_min_correlation: float = float(os.getenv("REPLAY_MONOTONICITY_MIN_CORRELATION", "0.05"))
+    replay_min_top_decile_lift: float = float(os.getenv("REPLAY_MIN_TOP_DECILE_LIFT", "0.03"))
+    replay_min_top_quintile_lift: float = float(os.getenv("REPLAY_MIN_TOP_QUINTILE_LIFT", "0.01"))
+    replay_max_monotonicity_violations: int = int(os.getenv("REPLAY_MAX_MONOTONICITY_VIOLATIONS", "2"))
+    replay_monotonicity_tolerance: float = float(os.getenv("REPLAY_MONOTONICITY_TOLERANCE", "0.01"))
+    replay_min_regime_slice_observations: int = int(os.getenv("REPLAY_MIN_REGIME_SLICE_OBSERVATIONS", "150"))
 
     stale_price_max_age_days: int = int(os.getenv("STALE_PRICE_MAX_AGE_DAYS", "3"))
     stale_news_max_age_days: int = int(os.getenv("STALE_NEWS_MAX_AGE_DAYS", "7"))
