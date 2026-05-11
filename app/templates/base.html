@@ -11,7 +11,7 @@
   <header class="site-header">
     <div>
       <h1>News + Fundamentals + Technicals Stock Scanner</h1>
-      <p class="subtle">Version 1 ranks opportunities. It does not claim calibrated probabilities.</p>
+      <p class="subtle">Version 2 adds replay and calibration tooling. Live probabilities remain disabled until replay parity is sufficient.</p>
       {% if build %}
       <p class="build-line subtle">Build {{ build.app_version }} · {{ build.build_id }} · schema {{ build.artifact_schema_version }}</p>
       {% endif %}
@@ -20,6 +20,7 @@
       <a href="/scanner">Scanner</a>
       <a href="/latest-results">Latest Results</a>
       <a href="/runs">Runs / Artifacts</a>
+      <a href="/replay">Replay / Calibration</a>
       <a href="/settings">Settings / Data Sources</a>
       <a href="/status">Health / Status</a>
     </nav>

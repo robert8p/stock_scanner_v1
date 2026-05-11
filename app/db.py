@@ -107,6 +107,29 @@ def init_db() -> None:
             cur.execute("ALTER TABLE candidates ADD COLUMN price_last_timestamp TEXT")
         if "news_last_timestamp" not in existing_candidate_cols:
             cur.execute("ALTER TABLE candidates ADD COLUMN news_last_timestamp TEXT")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS replay_runs (
+                replay_id TEXT PRIMARY KEY,
+                started_at TEXT,
+                ended_at TEXT,
+                status TEXT,
+                progress_current INTEGER,
+                progress_total INTEGER,
+                phase TEXT,
+                message TEXT,
+                provider TEXT,
+                replay_mode TEXT,
+                settings_json TEXT,
+                warnings_json TEXT,
+                artifacts_dir TEXT,
+                artifact_zip_path TEXT,
+                summary_json TEXT
+            )
+            """
+        )
+
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS shortlist_outcomes (
@@ -261,3 +284,44 @@ def deserialize_candidate(candidate: Optional[Dict[str, Any]]) -> Optional[Dict[
             except json.JSONDecodeError:
                 candidate[base] = value
     return candidate
+
+
+
+def upsert_replay_run(record: Dict[str, Any]) -> None:
+    columns = list(record.keys())
+    placeholders = ", ".join(["?"] * len(columns))
+    update_clause = ", ".join([f"{col}=excluded.{col}" for col in columns if col != "replay_id"])
+    sql = f"INSERT INTO replay_runs ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(replay_id) DO UPDATE SET {update_clause}"
+    with db_cursor() as cur:
+        cur.execute(sql, [record[col] for col in columns])
+
+
+def get_latest_replay_run() -> Optional[Dict[str, Any]]:
+    with db_cursor() as cur:
+        row = cur.execute("SELECT * FROM replay_runs ORDER BY started_at DESC LIMIT 1").fetchone()
+    return dict(row) if row else None
+
+
+def get_replay_run(replay_id: str) -> Optional[Dict[str, Any]]:
+    with db_cursor() as cur:
+        row = cur.execute("SELECT * FROM replay_runs WHERE replay_id = ?", (replay_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_replay_runs(limit: int = 50) -> List[Dict[str, Any]]:
+    with db_cursor() as cur:
+        rows = cur.execute("SELECT * FROM replay_runs ORDER BY started_at DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def deserialize_replay_run(run: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not run:
+        return None
+    for key in ["settings_json", "warnings_json", "summary_json"]:
+        value = run.get(key)
+        if isinstance(value, str) and value:
+            try:
+                run[key[:-5] if key.endswith('_json') else key] = json.loads(value)
+            except json.JSONDecodeError:
+                run[key[:-5] if key.endswith('_json') else key] = value
+    return run

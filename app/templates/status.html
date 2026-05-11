@@ -18,46 +18,42 @@
     <div class="metric-card"><span>Pending outcomes</span><strong>{{ runtime_status.outcome_tracking_summary.pending }}</strong></div>
     <div class="metric-card"><span>Target hits</span><strong>{{ runtime_status.outcome_tracking_summary.target_hit }}</strong></div>
     <div class="metric-card"><span>Stop hits</span><strong>{{ runtime_status.outcome_tracking_summary.stop_hit }}</strong></div>
+    <div class="metric-card"><span>Replay phase</span><strong>{{ replay_status.phase }}</strong></div>
   </div>
 </section>
 
 <section class="hero-grid">
   <div class="card">
     <h2>Artifact integrity</h2>
-    <p class="{% if artifact_integrity.status == 'pass' %}integrity-pass{% else %}integrity-fail{% endif %}">
-      <strong>Status:</strong> {{ artifact_integrity.status }}
-    </p>
-    {% if artifact_integrity.issues %}
-    <ul>
-      {% for issue in artifact_integrity.issues %}
-      <li>{{ issue }}</li>
-      {% endfor %}
-    </ul>
-    {% endif %}
-    {% if artifact_integrity.artifacts_present %}
-    <p class="subtle">Last pack contents: {{ artifact_integrity.artifacts_present | join(', ') }}</p>
-    {% endif %}
+    <p class="{% if artifact_integrity.status == 'pass' %}integrity-pass{% else %}integrity-fail{% endif %}"><strong>Status:</strong> {{ artifact_integrity.status }}</p>
+    {% if artifact_integrity.issues %}<ul>{% for issue in artifact_integrity.issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% endif %}
+    {% if artifact_integrity.artifacts_present %}<p class="subtle">Last pack contents: {{ artifact_integrity.artifacts_present | join(', ') }}</p>{% endif %}
   </div>
+  <div class="card">
+    <h2>Replay artifact integrity</h2>
+    <p class="{% if replay_artifact_integrity.status == 'pass' %}integrity-pass{% else %}integrity-fail{% endif %}"><strong>Status:</strong> {{ replay_artifact_integrity.status }}</p>
+    {% if replay_artifact_integrity.issues %}<ul>{% for issue in replay_artifact_integrity.issues %}<li>{{ issue }}</li>{% endfor %}</ul>{% endif %}
+    {% if replay_artifact_integrity.artifacts_present %}<p class="subtle">Last replay pack contents: {{ replay_artifact_integrity.artifacts_present | join(', ') }}</p>{% endif %}
+  </div>
+</section>
+
+<section class="hero-grid">
   <div class="card">
     <h2>Recent outcome tracking</h2>
     <div class="table-wrap">
       <table class="small-table">
-        <thead>
-          <tr><th>Run</th><th>Ticker</th><th>Status</th><th>Days</th><th>End return</th></tr>
-        </thead>
+        <thead><tr><th>Run</th><th>Ticker</th><th>Status</th><th>Days</th><th>End return</th></tr></thead>
         <tbody>
           {% for row in recent_outcomes[:12] %}
-          <tr>
-            <td>{{ row.run_id }}</td>
-            <td>{{ row.ticker }}</td>
-            <td>{{ row.status }}</td>
-            <td>{{ row.days_elapsed }}</td>
-            <td>{{ row.end_return_pct }}</td>
-          </tr>
+          <tr><td>{{ row.run_id }}</td><td>{{ row.ticker }}</td><td>{{ row.status }}</td><td>{{ row.days_elapsed }}</td><td>{{ row.end_return_pct }}</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+  </div>
+  <div class="card">
+    <h2>Replay status</h2>
+    <pre class="json-box">{{ replay_status | tojson(indent=2) }}</pre>
   </div>
 </section>
 

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero-grid">
+  <div class="card">
+    <h2>Replay / Calibration</h2>
+    <p>Run a historical replay over daily snapshots to test whether higher-ranked names outperform lower-ranked names. This build uses an honest timing-only replay mode because point-in-time fundamentals and news are not yet available from the current provider stack.</p>
+    <button id="run-replay-btn" class="primary-btn">Run Replay</button>
+    <p class="subtle">Replay mode: {{ settings.replay_default_mode }} · Universe cap: {{ settings.replay_ticker_limit }} · Max snapshots: {{ settings.replay_max_snapshots }} · Horizon: {{ settings.outcome_horizon_days }} trading days</p>
+    <div id="replay-feedback" class="status-box">Ready</div>
+    <div class="progress-wrap"><div id="replay-progress-bar" class="progress-bar"></div></div>
+    <p id="replay-progress-label" class="subtle">No active replay.</p>
+  </div>
+  <div class="card emphasis">
+    <h2>Calibration truth boundary</h2>
+    <ul>
+      <li>This V2 build creates replay and calibration artifacts.</li>
+      <li>It does not yet authorize live probability labels for the full composite score.</li>
+      <li>Probability display stays disabled until replay parity includes point-in-time structural and catalyst inputs.</li>
+      <li>Use the validation pack to judge whether ranking quality improves with score.</li>
+    </ul>
+  </div>
+</section>
+
+{% if latest_replay %}
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Latest replay</h2>
+      <p class="subtle">Replay {{ latest_replay.replay_id }} · {{ latest_replay.status }} · Mode {{ latest_replay.replay_mode }}</p>
+    </div>
+    <div class="button-row">
+      <a class="primary-btn" href="/download/replay/{{ latest_replay.replay_id }}/validation-pack">Download validation pack</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_summary.json">Summary</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/calibration_table.csv">Calibration</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/score_band_metrics.csv">Score bands</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_parity_assessment.json">Parity</a>
+    </div>
+  </div>
+
+  {% if latest_replay.summary %}
+  <div class="metric-grid">
+    <div class="metric-card"><span>Snapshots</span><strong>{{ latest_replay.summary.snapshot_count_completed }}</strong></div>
+    <div class="metric-card"><span>Observations</span><strong>{{ latest_replay.summary.observation_count }}</strong></div>
+    <div class="metric-card"><span>Shortlist obs</span><strong>{{ latest_replay.summary.shortlist_observation_count }}</strong></div>
+    <div class="metric-card"><span>Parity</span><strong>{{ latest_replay.summary.validation.parity_status }}</strong></div>
+    <div class="metric-card"><span>Eligible for live probabilities</span><strong>{{ 'yes' if latest_replay.summary.validation.eligible_for_probability_display else 'no' }}</strong></div>
+    <div class="metric-card"><span>Brier</span><strong>{{ latest_replay.summary.validation.brier_score }}</strong></div>
+  </div>
+  <div class="alert-box {% if latest_replay.summary.validation.eligible_for_probability_display %}good{% else %}bad{% endif %}">
+    <strong>Calibration decision:</strong> {{ latest_replay.summary.validation.eligibility_reason }}
+  </div>
+  {% endif %}
+</section>
+
+<section class="hero-grid">
+  <div class="card">
+    <h2>Top vs rest</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Bucket</th><th>Obs</th><th>Hit rate</th><th>Lift vs all</th></tr></thead>
+        <tbody>
+          {% for row in latest_replay.top_vs_rest[:8] %}
+          <tr>
+            <td>{{ row.bucket }}</td>
+            <td>{{ row.observations }}</td>
+            <td>{{ row.hit_rate }}</td>
+            <td>{{ row.lift_vs_all }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Calibration table</h2>
+    <div class="table-wrap">
+      <table class="small-table">
+        <thead><tr><th>Band</th><th>Obs</th><th>Predicted</th><th>Observed</th><th>Gap</th></tr></thead>
+        <tbody>
+          {% for row in latest_replay.calibration_table[:10] %}
+          <tr>
+            <td>{{ row.reliability_band }}</td>
+            <td>{{ row.observations }}</td>
+            <td>{{ row.avg_predicted_probability }}</td>
+            <td>{{ row.observed_hit_rate }}</td>
+            <td>{{ row.calibration_gap }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% else %}
+<section class="card">
+  <p>No replay has been run yet.</p>
+</section>
+{% endif %}
+{% endblock %}

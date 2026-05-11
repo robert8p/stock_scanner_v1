@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import zipfile
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import FastAPI, Form, Header, HTTPException, Request
@@ -13,15 +13,27 @@ from fastapi.templating import Jinja2Templates
 from .config import load_settings, persist_settings
 from .db import (
     deserialize_candidate,
+    deserialize_replay_run,
     deserialize_run,
     get_candidate,
+    get_latest_replay_run,
     get_latest_run,
+    get_replay_run,
     get_run,
     init_db,
     list_candidates,
+    list_replay_runs,
     list_runs,
     list_shortlist_outcomes,
     summarize_shortlist_outcomes,
+)
+from .replay import (
+    REQUIRED_REPLAY_ARTIFACTS,
+    ReplayAlreadyRunningError,
+    ReplayCooldownError,
+    get_replay_status,
+    latest_replay_payload,
+    run_replay_now,
 )
 from .scanner import (
     SHORTLIST_DEFAULT_SORT_MODE,
@@ -45,7 +57,6 @@ app = FastAPI(title=settings.app_name)
 BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-
 
 REQUIRED_SCAN_PACK_ARTIFACTS = {
     "scan_summary.json",
@@ -90,6 +101,23 @@ def _read_artifact_integrity(run: Dict[str, Any] | None) -> Dict[str, Any]:
     return integrity
 
 
+def _read_replay_artifact_integrity(run: Dict[str, Any] | None) -> Dict[str, Any]:
+    if not run:
+        return {"status": "unknown", "issues": ["No latest replay available"]}
+    artifacts_dir = Path(run.get("artifacts_dir") or "")
+    manifest_path = artifacts_dir / "replay_artifact_manifest.json"
+    if not manifest_path.exists():
+        return {"status": "missing", "issues": ["replay_artifact_manifest.json missing"]}
+    try:
+        payload = json.loads(manifest_path.read_text())
+    except Exception as exc:
+        return {"status": "invalid", "issues": [f"Could not parse replay_artifact_manifest.json: {exc}"]}
+    integrity = payload.get("artifact_integrity") or {"status": "unknown", "issues": ["artifact_integrity block missing"]}
+    integrity["artifacts_present"] = payload.get("artifacts_present_before_zip", payload.get("artifacts_present", []))
+    integrity["required_artifacts"] = payload.get("required_artifacts", [])
+    return integrity
+
+
 @app.get("/", response_class=HTMLResponse)
 def root() -> RedirectResponse:
     return RedirectResponse(url="/scanner", status_code=302)
@@ -99,6 +127,7 @@ def root() -> RedirectResponse:
 def health() -> Dict[str, Any]:
     current_settings = load_settings()
     latest = deserialize_run(get_latest_run())
+    latest_replay = deserialize_replay_run(get_latest_replay_run())
     latest_safe = latest.copy() if latest else None
     if latest_safe and isinstance(latest_safe.get("settings_json"), str):
         latest_safe["settings_json"] = "***REDACTED***"
@@ -114,8 +143,11 @@ def health() -> Dict[str, Any]:
         "artifacts_dir": current_settings.artifacts_dir,
         "settings": sanitize_settings_payload(current_settings.to_dict()),
         "latest_run": latest_safe,
+        "latest_replay": latest_replay,
         "artifact_integrity": _read_artifact_integrity(latest or None),
+        "replay_artifact_integrity": _read_replay_artifact_integrity(latest_replay or None),
         "outcome_tracking_summary": summarize_shortlist_outcomes(),
+        "replay_status": get_replay_status(),
     }
 
 
@@ -127,14 +159,14 @@ def _json_download(payload: Dict[str, Any], filename: str):
     return FileResponse(path, filename=filename, media_type="application/json")
 
 
-def _ensure_scan_pack_parity(run: Dict[str, Any]) -> Path:
+def _ensure_zip_parity(run: Dict[str, Any], required_artifacts: set[str], manifest_name: str, zip_field: str) -> Path:
     artifacts_dir = Path(run.get("artifacts_dir") or "")
-    zip_path = Path(run.get("artifact_zip_path") or "")
+    zip_path = Path(run.get(zip_field) or "")
     if not artifacts_dir.exists():
         raise HTTPException(status_code=404, detail="Artifacts directory not found")
 
     existing_files = {p.name for p in artifacts_dir.iterdir() if p.is_file()}
-    missing_on_disk = sorted(REQUIRED_SCAN_PACK_ARTIFACTS - existing_files)
+    missing_on_disk = sorted(required_artifacts - existing_files)
     if missing_on_disk:
         raise HTTPException(status_code=409, detail=f"Required artifacts missing on disk: {', '.join(missing_on_disk)}")
 
@@ -146,15 +178,15 @@ def _ensure_scan_pack_parity(run: Dict[str, Any]) -> Path:
         except Exception:
             zip_names = set()
 
-    if (not zip_path.exists()) or (REQUIRED_SCAN_PACK_ARTIFACTS - zip_names):
+    if (not zip_path.exists()) or (required_artifacts - zip_names):
         zip_directory(artifacts_dir, zip_path)
-
     return zip_path
 
 
 @app.get("/scanner", response_class=HTMLResponse)
 def scanner_page(request: Request):
     latest = latest_run_with_candidates(sort_mode=SHORTLIST_DEFAULT_SORT_MODE)
+    latest_replay = latest_replay_payload()
     return templates.TemplateResponse(
         request=request,
         name="scanner.html",
@@ -162,7 +194,9 @@ def scanner_page(request: Request):
             "request": request,
             "settings": load_settings(),
             "latest": latest,
+            "latest_replay": latest_replay,
             "runtime_status": get_runtime_status(),
+            "replay_status": get_replay_status(),
             "build": _build_info(),
         },
     )
@@ -187,6 +221,22 @@ def latest_results_page(request: Request, sort_mode: str = SHORTLIST_DEFAULT_SOR
     )
 
 
+@app.get("/replay", response_class=HTMLResponse)
+def replay_page(request: Request):
+    latest = latest_replay_payload()
+    return templates.TemplateResponse(
+        request=request,
+        name="replay.html",
+        context={
+            "request": request,
+            "settings": load_settings(),
+            "replay_status": get_replay_status(),
+            "latest_replay": latest,
+            "build": _build_info(),
+        },
+    )
+
+
 @app.get("/candidate/{ticker}", response_class=HTMLResponse)
 def candidate_page(request: Request, ticker: str, run_id: str | None = None):
     run = deserialize_run(get_run(run_id)) if run_id else deserialize_run(get_latest_run())
@@ -205,10 +255,11 @@ def candidate_page(request: Request, ticker: str, run_id: str | None = None):
 @app.get("/runs", response_class=HTMLResponse)
 def runs_page(request: Request):
     runs = [deserialize_run(run) for run in list_runs(limit=50)]
+    replay_runs = [deserialize_replay_run(run) for run in list_replay_runs(limit=20)]
     return templates.TemplateResponse(
         request=request,
         name="runs.html",
-        context={"request": request, "runs": runs, "build": _build_info()},
+        context={"request": request, "runs": runs, "replay_runs": replay_runs, "build": _build_info()},
     )
 
 
@@ -257,6 +308,7 @@ def update_settings_page(
 @app.get("/status", response_class=HTMLResponse)
 def status_page(request: Request):
     latest = deserialize_run(get_latest_run())
+    latest_replay = deserialize_replay_run(get_latest_replay_run())
     return templates.TemplateResponse(
         request=request,
         name="status.html",
@@ -264,7 +316,9 @@ def status_page(request: Request):
             "request": request,
             "health": health(),
             "runtime_status": get_runtime_status(),
+            "replay_status": get_replay_status(),
             "artifact_integrity": _read_artifact_integrity(latest or None),
+            "replay_artifact_integrity": _read_replay_artifact_integrity(latest_replay or None),
             "recent_outcomes": list_shortlist_outcomes(limit=25),
             "build": _build_info(),
         },
@@ -278,12 +332,21 @@ def download_health():
 
 @app.get("/download/status")
 def download_status():
-    return _json_download(get_runtime_status(), "status.json")
+    status = get_runtime_status()
+    status["replay_status"] = get_replay_status()
+    return _json_download(status, "status.json")
 
 
 @app.get("/api/status")
 def api_status():
-    return JSONResponse(get_runtime_status())
+    payload = get_runtime_status()
+    payload["replay_status"] = get_replay_status()
+    return JSONResponse(payload)
+
+
+@app.get("/api/replay/status")
+def api_replay_status():
+    return JSONResponse(get_replay_status())
 
 
 @app.get("/api/universe")
@@ -305,6 +368,19 @@ async def api_scan_run(request: Request, x_idempotency_key: str | None = Header(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/replay/run")
+async def api_replay_run(request: Request, x_idempotency_key: str | None = Header(default=None)):
+    try:
+        payload = {}
+        if request.headers.get("content-type", "").startswith("application/json"):
+            payload = await request.json()
+        request_key = x_idempotency_key or payload.get("request_key")
+        replay_id = run_replay_now(request_key=request_key)
+        return {"status": "started", "replay_id": replay_id, "request_key": request_key}
+    except (ReplayAlreadyRunningError, ReplayCooldownError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/scan/latest")
 def api_scan_latest(sort_mode: str = SHORTLIST_DEFAULT_SORT_MODE):
     latest = latest_run_with_candidates(sort_mode=sort_mode)
@@ -313,9 +389,22 @@ def api_scan_latest(sort_mode: str = SHORTLIST_DEFAULT_SORT_MODE):
     return latest
 
 
+@app.get("/api/replay/latest")
+def api_replay_latest():
+    latest = latest_replay_payload()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No replay runs available")
+    return latest
+
+
 @app.get("/api/scan/history")
 def api_scan_history(limit: int = 20):
     return {"runs": [deserialize_run(run) for run in list_runs(limit=limit)]}
+
+
+@app.get("/api/replay/history")
+def api_replay_history(limit: int = 20):
+    return {"runs": [deserialize_replay_run(run) for run in list_replay_runs(limit=limit)]}
 
 
 @app.get("/api/candidate/{ticker}")
@@ -341,7 +430,8 @@ def api_outcomes(limit: int = 100, status: str | None = None):
 @app.get("/api/artifacts")
 def api_artifacts(limit: int = 20):
     runs = [deserialize_run(run) for run in list_runs(limit=limit)]
-    return {"runs": runs, "build": _build_info()}
+    replay_runs = [deserialize_replay_run(run) for run in list_replay_runs(limit=limit)]
+    return {"runs": runs, "replay_runs": replay_runs, "build": _build_info()}
 
 
 @app.get("/download/run/{run_id}/scan-pack")
@@ -349,7 +439,16 @@ def download_scan_pack(run_id: str):
     run = get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    zip_path = _ensure_scan_pack_parity(run)
+    zip_path = _ensure_zip_parity(run, REQUIRED_SCAN_PACK_ARTIFACTS, "artifact_manifest.json", "artifact_zip_path")
+    return FileResponse(zip_path, filename=zip_path.name)
+
+
+@app.get("/download/replay/{replay_id}/validation-pack")
+def download_replay_pack(replay_id: str):
+    run = get_replay_run(replay_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Replay run not found")
+    zip_path = _ensure_zip_parity(run, REQUIRED_REPLAY_ARTIFACTS, "replay_artifact_manifest.json", "artifact_zip_path")
     return FileResponse(zip_path, filename=zip_path.name)
 
 
@@ -358,6 +457,18 @@ def download_artifact(run_id: str, filename: str):
     run = get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+    artifacts_dir = Path(run["artifacts_dir"])
+    target = artifacts_dir / filename
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return FileResponse(target, filename=target.name)
+
+
+@app.get("/download/replay/{replay_id}/{filename}")
+def download_replay_artifact(replay_id: str, filename: str):
+    run = get_replay_run(replay_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Replay run not found")
     artifacts_dir = Path(run["artifacts_dir"])
     target = artifacts_dir / filename
     if not target.exists():

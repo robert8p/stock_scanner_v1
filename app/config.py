@@ -19,10 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     app_name: str = os.getenv("APP_NAME", "news-fundamentals-technicals-stock-scanner")
     app_env: str = os.getenv("APP_ENV", "production")
-    app_version: str = os.getenv("APP_VERSION", "v1.6.1")
-    build_id: str = os.getenv("BUILD_ID", "v1.6.1-outcome-timestamp-hotfix")
+    app_version: str = os.getenv("APP_VERSION", "v2.0.0")
+    build_id: str = os.getenv("BUILD_ID", "v2.0.0-replay-calibration")
     build_timestamp_utc: str = os.getenv("BUILD_TIMESTAMP_UTC", datetime.now(timezone.utc).isoformat())
-    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-09-v1")
+    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-10-v2")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 
@@ -51,6 +51,17 @@ class AppSettings:
     yfinance_timeout_seconds: int = int(os.getenv("YFINANCE_TIMEOUT_SECONDS", "20"))
     requests_timeout_seconds: int = int(os.getenv("REQUESTS_TIMEOUT_SECONDS", "20"))
     yfinance_bulk_chunk_size: int = int(os.getenv("YFINANCE_BULK_CHUNK_SIZE", "100"))
+
+
+    replay_ticker_limit: int = int(os.getenv("REPLAY_TICKER_LIMIT", "120"))
+    replay_max_snapshots: int = int(os.getenv("REPLAY_MAX_SNAPSHOTS", "80"))
+    replay_history_days: int = int(os.getenv("REPLAY_HISTORY_DAYS", "420"))
+    replay_warmup_days: int = int(os.getenv("REPLAY_WARMUP_DAYS", "220"))
+    replay_step_days: int = int(os.getenv("REPLAY_STEP_DAYS", "1"))
+    replay_min_rows_per_snapshot: int = int(os.getenv("REPLAY_MIN_ROWS_PER_SNAPSHOT", "30"))
+    replay_default_mode: str = os.getenv("REPLAY_DEFAULT_MODE", "timing_only")
+    calibration_min_observations: int = int(os.getenv("CALIBRATION_MIN_OBSERVATIONS", "250"))
+    calibration_min_band_size: int = int(os.getenv("CALIBRATION_MIN_BAND_SIZE", "25"))
 
     stale_price_max_age_days: int = int(os.getenv("STALE_PRICE_MAX_AGE_DAYS", "3"))
     stale_news_max_age_days: int = int(os.getenv("STALE_NEWS_MAX_AGE_DAYS", "7"))

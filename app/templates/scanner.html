@@ -7,9 +7,7 @@
     <button id="run-scan-btn" class="primary-btn">Run Scan</button>
     <p class="subtle">Provider: {{ 'demo' if settings.demo_mode else settings.default_provider }} · Universe slice: {{ settings.scan_ticker_limit }} · Full enrichment cap: {{ settings.enrichment_limit }}</p>
     <div id="scan-feedback" class="status-box">Ready</div>
-    <div class="progress-wrap">
-      <div id="scan-progress-bar" class="progress-bar"></div>
-    </div>
+    <div class="progress-wrap"><div id="scan-progress-bar" class="progress-bar"></div></div>
     <p id="scan-progress-label" class="subtle">No active scan.</p>
   </div>
   <div class="card emphasis">
@@ -17,11 +15,34 @@
     <ul>
       <li>Build/version truth is surfaced in the UI and health outputs.</li>
       <li>Artifact integrity is enforced before a run is marked complete.</li>
-      <li>Runs now degrade honestly when coverage or freshness is thin.</li>
+      <li>Runs degrade honestly when coverage or freshness is thin.</li>
       <li>Shortlist outcomes are tracked forward using the +5% / -3% / 20-day rule.</li>
     </ul>
   </div>
 </section>
+
+{% if latest_replay %}
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Latest replay / calibration</h2>
+      <p class="subtle">Replay {{ latest_replay.replay_id }} · {{ latest_replay.status }} · Mode {{ latest_replay.replay_mode }}</p>
+    </div>
+    <a class="link-btn" href="/replay">Open replay / calibration</a>
+  </div>
+  {% if latest_replay.summary %}
+  <div class="metric-grid">
+    <div class="metric-card"><span>Snapshots</span><strong>{{ latest_replay.summary.snapshot_count_completed }}</strong></div>
+    <div class="metric-card"><span>Observations</span><strong>{{ latest_replay.summary.observation_count }}</strong></div>
+    <div class="metric-card"><span>Parity</span><strong>{{ latest_replay.summary.validation.parity_status }}</strong></div>
+    <div class="metric-card"><span>Eligible for live probabilities</span><strong>{{ 'yes' if latest_replay.summary.validation.eligible_for_probability_display else 'no' }}</strong></div>
+  </div>
+  <div class="alert-box {% if latest_replay.summary.validation.eligible_for_probability_display %}good{% else %}bad{% endif %}">
+    <strong>Calibration decision:</strong> {{ latest_replay.summary.validation.eligibility_reason }}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if latest %}
 <section class="card">
@@ -49,14 +70,7 @@
     <table>
       <thead>
         <tr>
-          <th>View rank</th>
-          <th>Score rank</th>
-          <th>Ticker</th>
-          <th>Company</th>
-          <th>Overall</th>
-          <th>Catalyst truth</th>
-          <th>Evidence</th>
-          <th>Detail</th>
+          <th>View rank</th><th>Score rank</th><th>Ticker</th><th>Company</th><th>Overall</th><th>Catalyst truth</th><th>Evidence</th><th>Detail</th>
         </tr>
       </thead>
       <tbody>
