@@ -66,7 +66,7 @@
       <table class="small-table">
         <thead><tr><th>Gate</th><th>Passed</th><th>Value</th><th>Threshold</th></tr></thead>
         <tbody>
-          {% for gate_name, gate in latest_replay.discrimination_report.gates.items() %}
+          {% for gate_name, gate in (latest_replay.discrimination_report.get("gates", {})).items() %}
           <tr>
             <td>{{ gate_name }}</td>
             <td>{{ 'yes' if gate.passed else 'no' }}</td>
@@ -84,7 +84,7 @@
       <table class="small-table">
         <thead><tr><th>Bucket</th><th>Obs</th><th>Hit rate</th><th>Lift vs all</th></tr></thead>
         <tbody>
-          {% for row in latest_replay.top_vs_rest[:8] %}
+          {% for row in (latest_replay.top_vs_rest or [])[:8] %}
           <tr>
             <td>{{ row.bucket }}</td>
             <td>{{ row.observations }}</td>
@@ -105,7 +105,7 @@
       <table class="small-table">
         <thead><tr><th>Quantile</th><th>Obs</th><th>Hit rate</th><th>Lift</th><th>Avg score</th></tr></thead>
         <tbody>
-          {% for row in latest_replay.quantile_lift_table[:10] %}
+          {% for row in (latest_replay.quantile_lift_table or [])[:10] %}
           <tr>
             <td>{{ row.quantile }}</td>
             <td>{{ row.observations }}</td>
@@ -124,7 +124,7 @@
       <table class="small-table">
         <thead><tr><th>Regime</th><th>Obs</th><th>Hit rate</th><th>Top decile lift</th></tr></thead>
         <tbody>
-          {% for row in latest_replay.regime_slice_metrics[:10] %}
+          {% for row in (latest_replay.regime_slice_metrics or [])[:10] %}
           <tr>
             <td>{{ row.market_regime }}</td>
             <td>{{ row.observations }}</td>
@@ -145,7 +145,7 @@
       <table class="small-table">
         <thead><tr><th>Band</th><th>Obs</th><th>Hit rate</th></tr></thead>
         <tbody>
-          {% for row in latest_replay.monotonicity_diagnostics.score_band_hit_rates[:10] %}
+          {% for row in (latest_replay.monotonicity_diagnostics.get("score_band_hit_rates", []))[:10] %}
           <tr>
             <td>{{ row.score_band }}</td>
             <td>{{ row.observations }}</td>
@@ -162,7 +162,7 @@
       <table class="small-table">
         <thead><tr><th>Band</th><th>Obs</th><th>Predicted</th><th>Observed</th><th>Gap</th></tr></thead>
         <tbody>
-          {% for row in latest_replay.calibration_table[:10] %}
+          {% for row in (latest_replay.calibration_table or [])[:10] %}
           <tr>
             <td>{{ row.reliability_band }}</td>
             <td>{{ row.observations }}</td>

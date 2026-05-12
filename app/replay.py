@@ -917,14 +917,25 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
     if not run:
         return None
     artifacts_dir = Path(run.get("artifacts_dir") or "")
-    replay_summary = run.get("summary") or {}
+    replay_summary = dict(run.get("summary") or {})
+    validation = dict(replay_summary.get("validation") or {})
+    replay_summary["validation"] = {
+        "parity_status": validation.get("parity_status", "unknown"),
+        "discrimination_validation_status": validation.get("discrimination_validation_status", "unknown"),
+        "score_outcome_spearman": validation.get("score_outcome_spearman"),
+        "top_decile_lift": validation.get("top_decile_lift"),
+        "score_band_monotonicity_violations": validation.get("score_band_monotonicity_violations"),
+        "discrimination_validation_reason": validation.get("discrimination_validation_reason", "No replay discrimination decision available yet."),
+        "eligible_for_probability_display": validation.get("eligible_for_probability_display", False),
+        "eligibility_reason": validation.get("eligibility_reason", "Probability display remains disabled until replay evidence is available."),
+    }
     calibration_table: List[Dict[str, Any]] = []
     score_band_metrics: List[Dict[str, Any]] = []
     top_vs_rest: List[Dict[str, Any]] = []
     quantile_lift_table: List[Dict[str, Any]] = []
     regime_slice_metrics: List[Dict[str, Any]] = []
-    discrimination_report: Dict[str, Any] = {}
-    monotonicity_diagnostics: Dict[str, Any] = {}
+    discrimination_report: Dict[str, Any] = {"gates": {}, "summary": {}}
+    monotonicity_diagnostics: Dict[str, Any] = {"score_band_hit_rates": [], "violations": []}
     if artifacts_dir.exists():
         csv_targets = {
             "calibration_table.csv": "calibration_table",
@@ -960,11 +971,15 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
                 try:
                     payload = json.loads(path.read_text())
                     if attr == "discrimination_report":
-                        discrimination_report = payload
+                        discrimination_report = payload if isinstance(payload, dict) else {"gates": {}, "summary": {}}
                     else:
-                        monotonicity_diagnostics = payload
+                        monotonicity_diagnostics = payload if isinstance(payload, dict) else {"score_band_hit_rates": [], "violations": []}
                 except Exception:
                     pass
+    discrimination_report.setdefault("gates", {})
+    discrimination_report.setdefault("summary", {})
+    monotonicity_diagnostics.setdefault("score_band_hit_rates", [])
+    monotonicity_diagnostics.setdefault("violations", [])
     run["summary"] = replay_summary
     run["calibration_table"] = calibration_table
     run["score_band_metrics"] = score_band_metrics
