@@ -55,7 +55,7 @@
           <td>{{ run.started_at }}</td>
           <td>{{ run.replay_mode }}</td>
           <td>
-            {% if run.artifact_zip_path %}<a href="/download/replay/{{ run.replay_id }}/validation-pack">Validation pack</a>{% endif %}
+            {% if run.status == "completed" and run.artifact_zip_path %}<a href="/download/replay/{{ run.replay_id }}/validation-pack">Validation pack</a>{% elif run.status == "failed" %}<a href="/download/replay/{{ run.replay_id }}/validation_log.txt">Validation log</a>{% endif %}
             {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/replay/{{ run.replay_id }}/replay_summary.json">Summary</a>{% endif %}
             {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/replay/{{ run.replay_id }}/calibration_table.csv">Calibration</a>{% endif %}
             {% if run.artifacts_dir %}<span class="subtle"> · </span><a href="/download/replay/{{ run.replay_id }}/validation_log.txt">Log</a>{% endif %}

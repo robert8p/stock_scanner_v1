@@ -29,6 +29,7 @@
       <p class="subtle">Replay {{ latest_replay.replay_id }} · {{ latest_replay.status }} · Mode {{ latest_replay.replay_mode }} · Surface {{ latest_replay.summary.replay_surface }}</p>
     </div>
     <div class="button-row">
+      {% if latest_replay.can_download_validation_pack %}
       <a class="primary-btn" href="/download/replay/{{ latest_replay.replay_id }}/validation-pack">Download validation pack</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_summary.json">Summary</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/discrimination_report.json">Discrimination</a>
@@ -36,8 +37,23 @@
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/quantile_lift_table.csv">Quantiles</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/regime_slice_metrics.csv">Regimes</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_parity_assessment.json">Parity</a>
+      {% elif latest_replay.has_validation_log %}
+      <a class="primary-btn" href="/download/replay/{{ latest_replay.replay_id }}/validation_log.txt">Download validation log</a>
+      {% endif %}
     </div>
   </div>
+
+  {% if latest_replay.status == 'failed' %}
+  <div class="alert-box bad">
+    <strong>Latest replay failed:</strong> {{ latest_replay.message or 'Unknown error' }}
+    {% if latest_replay.missing_required_artifacts %}<br>Missing validation artifacts: {{ latest_replay.missing_required_artifacts | join(', ') }}{% endif %}
+    {% if latest_replay.has_validation_log %}<br>Use the validation log download above for the failure trace.{% endif %}
+  </div>
+  {% elif latest_replay.status != 'completed' %}
+  <div class="alert-box">
+    <strong>Latest replay is not complete yet.</strong> Validation pack download will appear after completion.
+  </div>
+  {% endif %}
 
   {% if latest_replay.summary %}
   <div class="metric-grid">

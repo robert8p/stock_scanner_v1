@@ -985,6 +985,9 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
     discrimination_report.setdefault("summary", {})
     monotonicity_diagnostics.setdefault("score_band_hit_rates", [])
     monotonicity_diagnostics.setdefault("violations", [])
+    required_names = set(REQUIRED_REPLAY_ARTIFACTS)
+    existing_names = {p.name for p in artifacts_dir.iterdir() if p.is_file()} if artifacts_dir.exists() else set()
+    missing_required_artifacts = sorted(required_names - existing_names)
     run["summary"] = replay_summary
     run["calibration_table"] = calibration_table
     run["score_band_metrics"] = score_band_metrics
@@ -993,4 +996,7 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
     run["regime_slice_metrics"] = regime_slice_metrics
     run["discrimination_report"] = discrimination_report
     run["monotonicity_diagnostics"] = monotonicity_diagnostics
+    run["can_download_validation_pack"] = bool(run.get("status") == "completed" and not missing_required_artifacts and run.get("artifact_zip_path"))
+    run["missing_required_artifacts"] = missing_required_artifacts
+    run["has_validation_log"] = bool(artifacts_dir.exists() and (artifacts_dir / "validation_log.txt").exists())
     return run

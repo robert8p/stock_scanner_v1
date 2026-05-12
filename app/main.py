@@ -162,12 +162,21 @@ def _json_download(payload: Dict[str, Any], filename: str):
 def _ensure_zip_parity(run: Dict[str, Any], required_artifacts: set[str], manifest_name: str, zip_field: str) -> Path:
     artifacts_dir = Path(run.get("artifacts_dir") or "")
     zip_path = Path(run.get(zip_field) or "")
+    run_label = "replay" if manifest_name.startswith("replay_") else "scan"
     if not artifacts_dir.exists():
+        if run_label == "replay" and run.get("status") == "failed":
+            raise HTTPException(status_code=409, detail=f"Replay {run.get('replay_id')} failed before artifacts were produced. Open validation_log.txt or rerun replay. Failure message: {run.get('message') or 'unknown error'}")
         raise HTTPException(status_code=404, detail="Artifacts directory not found")
 
     existing_files = {p.name for p in artifacts_dir.iterdir() if p.is_file()}
     missing_on_disk = sorted(required_artifacts - existing_files)
     if missing_on_disk:
+        if run_label == "replay":
+            if run.get("status") == "failed":
+                detail = f"Replay {run.get('replay_id')} failed before the full validation pack was produced. Missing artifacts: {', '.join(missing_on_disk)}. Open validation_log.txt for the failure reason or rerun replay."
+                raise HTTPException(status_code=409, detail=detail)
+            if run.get("status") != "completed":
+                raise HTTPException(status_code=409, detail=f"Replay {run.get('replay_id')} is not complete yet, so the validation pack is unavailable. Current status: {run.get('status') or 'unknown'}")
         raise HTTPException(status_code=409, detail=f"Required artifacts missing on disk: {', '.join(missing_on_disk)}")
 
     zip_names = set()

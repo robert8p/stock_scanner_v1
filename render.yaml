@@ -15,13 +15,13 @@ services:
       - key: APP_ENV
         value: production
       - key: APP_VERSION
-        value: v2.1.1
+        value: v2.1.3
       - key: BUILD_ID
-        value: v2.1.1-replay-discrimination-hardening
+        value: v2.1.3-replay-failure-guard
       - key: BUILD_TIMESTAMP_UTC
-        value: 2026-05-10T19:00:00+00:00
+        value: 2026-05-13T00:00:00+00:00
       - key: ARTIFACT_SCHEMA_VERSION
-        value: 2026-05-12-v2.1.1
+        value: 2026-05-13-v2.1.3
       - key: DATA_DIR
         value: /var/data
       - key: DATABASE_PATH
