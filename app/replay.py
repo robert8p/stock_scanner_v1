@@ -157,7 +157,12 @@ def _spearman_corr(xs: List[float], ys: List[float]) -> Optional[float]:
         return None
     sx = pd.Series(xs, dtype=float)
     sy = pd.Series(ys, dtype=float)
-    corr = sx.corr(sy, method="spearman")
+    # Avoid optional SciPy dependency on platforms where pandas may delegate
+    # Spearman calculation to SciPy. Rank both series explicitly, then compute
+    # ordinary Pearson correlation on the ranks.
+    sx_rank = sx.rank(method="average")
+    sy_rank = sy.rank(method="average")
+    corr = sx_rank.corr(sy_rank)
     if corr is None or pd.isna(corr):
         return None
     return round(float(corr), 4)
