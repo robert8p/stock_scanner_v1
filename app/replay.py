@@ -53,6 +53,7 @@ REQUIRED_REPLAY_ARTIFACTS = {
     "config_used.json",
     "replay_artifact_manifest.json",
     "replay_parity_assessment.json",
+    "surface_feature_report.json",
 }
 
 
@@ -405,6 +406,412 @@ def _context_adjustment(metrics: Dict[str, Any], regime: Dict[str, Any]) -> Tupl
     return round(adjustment, 2), reasons[:3], risks[:3]
 
 
+def _trailing_return(series: pd.Series, periods: int) -> Optional[float]:
+    if series is None or len(series) <= periods:
+        return None
+    try:
+        start = float(series.iloc[-(periods + 1)])
+        end = float(series.iloc[-1])
+        if start == 0:
+            return None
+        return float(end / start - 1.0)
+    except Exception:
+        return None
+
+
+def _relative_trailing_return(asset_close: pd.Series, benchmark_close: Optional[pd.Series], periods: int) -> Optional[float]:
+    if benchmark_close is None or benchmark_close.empty:
+        return None
+    asset_ret = _trailing_return(asset_close, periods)
+    bench_ret = _trailing_return(benchmark_close, periods)
+    if asset_ret is None or bench_ret is None:
+        return None
+    return float(asset_ret - bench_ret)
+
+
+def _rolling_slope_pct(series: pd.Series, periods: int) -> Optional[float]:
+    if series is None or len(series.dropna()) <= periods:
+        return None
+    tail = series.dropna()
+    try:
+        start = float(tail.iloc[-(periods + 1)])
+        end = float(tail.iloc[-1])
+        if start == 0:
+            return None
+        return float(end / start - 1.0)
+    except Exception:
+        return None
+
+
+def _trend_efficiency(close: pd.Series, periods: int = 20) -> Optional[float]:
+    if close is None or len(close) <= periods:
+        return None
+    window = close.tail(periods + 1)
+    if len(window) <= periods:
+        return None
+    path = window.diff().abs().sum()
+    if path is None or pd.isna(path) or float(path) == 0.0:
+        return None
+    net = abs(float(window.iloc[-1]) - float(window.iloc[0]))
+    return float(net / float(path))
+
+
+def _surface_feature_metrics(hist: pd.DataFrame, spy_hist: pd.DataFrame, sector_hist: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    close = hist["Close"].dropna()
+    low = hist["Low"].dropna() if "Low" in hist.columns else close
+    returns = close.pct_change().dropna()
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    latest = float(close.iloc[-1]) if not close.empty else None
+
+    spy_close = spy_hist["Close"].dropna() if spy_hist is not None and not spy_hist.empty and "Close" in spy_hist.columns else None
+    sector_close = sector_hist["Close"].dropna() if sector_hist is not None and not sector_hist.empty and "Close" in sector_hist.columns else None
+
+    vol20 = float(returns.tail(20).std()) if len(returns) >= 20 else None
+    vol60 = float(returns.tail(60).std()) if len(returns) >= 60 else None
+    compression_ratio = None
+    if vol20 is not None and vol60 not in (None, 0):
+        compression_ratio = float(vol20 / vol60)
+
+    recent_close = close.tail(6)
+    recent_sma20 = sma20.tail(6)
+    reclaimed_20d = False
+    if latest is not None and len(recent_close) >= 2 and len(recent_sma20.dropna()) >= 2:
+        prior_below = bool((recent_close.iloc[:-1] < recent_sma20.iloc[:-1]).fillna(False).any())
+        reclaimed_20d = bool(latest > float(recent_sma20.iloc[-1]) and prior_below)
+
+    return {
+        "return_5d": _trailing_return(close, 5),
+        "return_10d": _trailing_return(close, 10),
+        "return_20d": _trailing_return(close, 20),
+        "return_60d": _trailing_return(close, 60),
+        "drawdown_20d_high": float(latest / float(close.tail(20).max()) - 1.0) if latest is not None and len(close) >= 20 else None,
+        "drawdown_63d_high": float(latest / float(close.tail(63).max()) - 1.0) if latest is not None and len(close) >= 63 else None,
+        "rebound_from_10d_low": float(latest / float(low.tail(10).min()) - 1.0) if latest is not None and len(low) >= 10 else None,
+        "trend_efficiency_20": _trend_efficiency(close, 20),
+        "sma20_slope_5d": _rolling_slope_pct(sma20, 5),
+        "sma50_slope_10d": _rolling_slope_pct(sma50, 10),
+        "compression_ratio_20_60": compression_ratio,
+        "positive_days_10": float((returns.tail(10) > 0).mean()) if len(returns) >= 10 else None,
+        "rs_spy_5d": _relative_trailing_return(close, spy_close, 5),
+        "rs_spy_20d": _relative_trailing_return(close, spy_close, 20),
+        "rs_sector_20d": _relative_trailing_return(close, sector_close, 20),
+        "rs_acceleration": (lambda rs5, rs20: (float(rs5 - rs20) if rs5 is not None and rs20 is not None else None))(_relative_trailing_return(close, spy_close, 5), _relative_trailing_return(close, spy_close, 20)),
+        "reclaimed_20d": reclaimed_20d,
+        "distance_vs_sma20": float(latest / float(sma20.iloc[-1]) - 1.0) if latest is not None and pd.notna(sma20.iloc[-1]) else None,
+        "distance_vs_sma50": float(latest / float(sma50.iloc[-1]) - 1.0) if latest is not None and pd.notna(sma50.iloc[-1]) else None,
+        "distance_vs_sma200": float(latest / float(sma200.iloc[-1]) - 1.0) if latest is not None and pd.notna(sma200.iloc[-1]) else None,
+    }
+
+
+
+
+
+def _score_continuation_surface(metrics: Dict[str, Any], surface: Dict[str, Any], regime: Dict[str, Any]) -> Tuple[float, List[str], List[str]]:
+    score = 35.0
+    reasons: List[str] = []
+    risks: List[str] = []
+
+    latest = metrics.get("latest_close")
+    sma50 = metrics.get("sma50")
+    sma200 = metrics.get("sma200")
+    one_month = metrics.get("one_month_return")
+    three_month = metrics.get("three_month_return")
+    rsi = metrics.get("rsi14")
+    volume_ratio = metrics.get("volume_ratio")
+    rs_spy = metrics.get("relative_strength_vs_spy")
+    rs_sector = metrics.get("relative_strength_vs_sector")
+
+    slope20 = surface.get("sma20_slope_5d")
+    slope50 = surface.get("sma50_slope_10d")
+    eff20 = surface.get("trend_efficiency_20")
+    compress = surface.get("compression_ratio_20_60")
+    dd20 = surface.get("drawdown_20d_high")
+    ret5 = surface.get("return_5d")
+    pos10 = surface.get("positive_days_10")
+
+    if latest and sma50 and sma200 and latest > sma50 > sma200:
+        score += 12
+        reasons.append("Trend stack aligned above 50d and 200d")
+    elif latest and sma50 and latest > sma50:
+        score += 6
+        reasons.append("Price holding above 50d average")
+    else:
+        score -= 6
+        risks.append("Continuation setup lacks moving-average support")
+
+    if slope20 is not None:
+        if slope20 > 0.015:
+            score += 8
+            reasons.append("20d trend slope rising decisively")
+        elif slope20 > 0.0:
+            score += 4
+        else:
+            score -= 4
+            risks.append("20d trend slope not rising")
+    if slope50 is not None:
+        if slope50 > 0.02:
+            score += 8
+            reasons.append("50d trend slope supportive")
+        elif slope50 < 0:
+            score -= 5
+            risks.append("50d trend slope negative")
+
+    if eff20 is not None:
+        if eff20 >= 0.55:
+            score += 8
+            reasons.append("Trend efficiency looks clean")
+        elif eff20 >= 0.4:
+            score += 4
+        elif eff20 < 0.22:
+            score -= 6
+            risks.append("Recent path looks choppy")
+
+    if compress is not None:
+        if 0.55 <= compress <= 0.95:
+            score += 6
+            reasons.append("Recent volatility compression constructive")
+        elif compress > 1.25:
+            score -= 4
+            risks.append("Recent volatility expansion reduces continuation quality")
+
+    if one_month is not None:
+        if one_month > 0.03:
+            score += 4
+        elif one_month < -0.02:
+            score -= 5
+            risks.append("1m momentum still negative for continuation")
+    if three_month is not None:
+        if three_month > 0.08:
+            score += 6
+            reasons.append("3m momentum remains supportive")
+        elif three_month < -0.05:
+            score -= 5
+            risks.append("3m momentum too weak for continuation")
+
+    if rs_spy is not None:
+        if rs_spy > 0.02:
+            score += 5
+            reasons.append("Still outperforming SPY")
+        elif rs_spy < -0.02:
+            score -= 5
+            risks.append("Lagging SPY weakens continuation")
+    if rs_sector is not None:
+        if rs_sector > 0.015:
+            score += 3
+        elif rs_sector < 0:
+            score -= 3
+
+    if dd20 is not None:
+        if -0.10 <= dd20 <= -0.02:
+            score += 5
+            reasons.append("Pullback depth still constructive")
+        elif dd20 > -0.01 and rsi is not None and rsi > 72:
+            score -= 4
+            risks.append("Continuation setup looks extended")
+
+    if ret5 is not None:
+        if 0 < ret5 < 0.08:
+            score += 3
+        elif ret5 > 0.12 and rsi is not None and rsi > 72:
+            score -= 4
+            risks.append("Very strong 5d move may be overcrowded")
+        elif ret5 < -0.04:
+            score -= 4
+            risks.append("Recent tape weak for continuation")
+
+    if volume_ratio is not None and volume_ratio > 1.05:
+        score += 3
+    if pos10 is not None and pos10 >= 0.6:
+        score += 2
+
+    regime_label = regime.get("regime_label") or "neutral"
+    if regime_label == "risk_on" and latest and sma50 and sma200 and latest > sma50 > sma200:
+        score += 4
+    if regime_label == "risk_off" and (rs_spy is None or rs_spy < 0.03):
+        score -= 6
+        risks.append("Risk-off tape demands stronger relative strength")
+
+    return round(max(0.0, min(100.0, score)), 2), reasons[:4], risks[:4]
+
+
+def _score_rebound_surface(metrics: Dict[str, Any], surface: Dict[str, Any], regime: Dict[str, Any]) -> Tuple[float, List[str], List[str]]:
+    score = 20.0
+    reasons: List[str] = []
+    risks: List[str] = []
+
+    latest = metrics.get("latest_close")
+    sma200 = metrics.get("sma200")
+    rsi = metrics.get("rsi14")
+    ret5 = surface.get("return_5d")
+    ret20 = surface.get("return_20d")
+    dd63 = surface.get("drawdown_63d_high")
+    rebound10 = surface.get("rebound_from_10d_low")
+    reclaim20 = bool(surface.get("reclaimed_20d"))
+    rs_delta = surface.get("rs_acceleration")
+    compress = surface.get("compression_ratio_20_60")
+    rs5 = surface.get("rs_spy_5d")
+
+    if dd63 is not None:
+        if -0.18 <= dd63 <= -0.05:
+            score += 12
+            reasons.append("Pullback depth is reset but not broken")
+        elif dd63 < -0.25:
+            score -= 8
+            risks.append("Pullback may be too deep for a clean rebound")
+
+    if ret20 is not None and ret5 is not None:
+        if ret20 < -0.03 and ret5 > 0.02:
+            score += 12
+            reasons.append("Short-term reversal forming after pullback")
+        elif ret20 < -0.08 and ret5 <= 0:
+            score -= 6
+            risks.append("No rebound confirmation yet")
+
+    if reclaim20:
+        score += 10
+        reasons.append("Price reclaimed 20d average")
+    if rs_delta is not None:
+        if rs_delta > 0.02:
+            score += 8
+            reasons.append("Relative strength is improving")
+        elif rs_delta < -0.02:
+            score -= 5
+            risks.append("Relative strength still deteriorating")
+
+    if rebound10 is not None:
+        if 0.03 <= rebound10 <= 0.1:
+            score += 6
+            reasons.append("Bounce off recent lows looks usable")
+        elif rebound10 > 0.14:
+            score += 2
+        elif rebound10 < 0.01:
+            score -= 4
+            risks.append("Bounce off recent lows still weak")
+
+    if rsi is not None:
+        if 40 <= rsi <= 58:
+            score += 8
+            reasons.append("RSI reset supports rebound potential")
+        elif 35 <= rsi < 40:
+            score += 4
+        elif rsi < 30:
+            score -= 6
+            risks.append("RSI still too damaged")
+        elif rsi > 68:
+            score -= 3
+            risks.append("Rebound may already be well progressed")
+
+    if latest and sma200:
+        if latest > sma200 or (dd63 is not None and dd63 > -0.15):
+            score += 4
+        else:
+            score -= 6
+            risks.append("Below 200d with deep drawdown")
+
+    regime_label = regime.get("regime_label") or "neutral"
+    if regime_label == "risk_off" and rs5 is not None and rs5 > 0:
+        score += 6
+        reasons.append("Risk-off tape rewards defensive relative rebound")
+    if regime_label == "risk_on" and ret20 is not None and ret20 < -0.12:
+        score -= 4
+        risks.append("Risk-on tape favors stronger trends than this rebound")
+
+    if compress is not None and compress > 1.35:
+        score -= 4
+        risks.append("Rebound is arriving with unstable volatility")
+
+    return round(max(0.0, min(100.0, score)), 2), reasons[:4], risks[:4]
+
+
+def _blend_surface_score_v22(raw_score: float, continuation_score: float, rebound_score: float, context_adjustment: float, regime: Dict[str, Any]) -> Tuple[float, float, str]:
+    regime_label = regime.get("regime_label") or "neutral"
+    if continuation_score >= rebound_score + 8:
+        label = "continuation"
+        score = (0.60 * raw_score) + (0.30 * continuation_score) + (0.10 * rebound_score)
+    elif rebound_score >= continuation_score + 8:
+        label = "rebound"
+        score = (0.35 * raw_score) + (0.55 * rebound_score) + (0.10 * continuation_score)
+    else:
+        label = "blended"
+        score = (0.45 * raw_score) + (0.35 * continuation_score) + (0.20 * rebound_score)
+
+    if regime_label == "risk_on" and label == "continuation":
+        score += 2.0
+    elif regime_label == "risk_off" and label == "rebound":
+        score += 2.5
+    elif regime_label == "risk_off" and label == "continuation":
+        score -= 2.5
+
+    surface_score = continuation_score if label == "continuation" else rebound_score if label == "rebound" else round((continuation_score + rebound_score) / 2.0, 2)
+    score += context_adjustment
+    score = max(0.0, min(100.0, score))
+    return round(score, 2), round(surface_score, 2), label
+
+
+def _build_surface_feature_report(observations: pd.DataFrame) -> Dict[str, Any]:
+    if observations.empty:
+        return {
+            "status": "empty",
+            "surface_label_distribution": {},
+            "surface_label_metrics": [],
+            "surface_by_regime": [],
+            "score_component_summary": {},
+        }
+
+    label_dist = observations.get("surface_label")
+    distribution = {}
+    if label_dist is not None:
+        counts = label_dist.fillna("unknown").value_counts().to_dict()
+        distribution = {str(k): int(v) for k, v in counts.items()}
+
+    label_metrics = []
+    if "surface_label" in observations.columns:
+        for label, group in observations.groupby("surface_label"):
+            label_metrics.append({
+                "surface_label": label,
+                "observations": int(len(group)),
+                "hit_rate": _safe_round(group["target_hit"].mean()),
+                "avg_score": _safe_round(group["score"].mean(), 2),
+                "avg_raw_score": _safe_round(group["raw_score"].mean(), 2) if "raw_score" in group.columns else None,
+                "avg_surface_score": _safe_round(group["surface_score"].mean(), 2) if "surface_score" in group.columns else None,
+                "avg_continuation_score": _safe_round(group["continuation_score"].mean(), 2) if "continuation_score" in group.columns else None,
+                "avg_rebound_score": _safe_round(group["rebound_score"].mean(), 2) if "rebound_score" in group.columns else None,
+                "avg_end_return_pct": _safe_round(group["end_return_pct"].mean()),
+            })
+    label_metrics = sorted(label_metrics, key=lambda row: row["observations"], reverse=True)
+
+    surface_by_regime = []
+    if "surface_label" in observations.columns and "market_regime" in observations.columns:
+        for (regime_label, surface_label), group in observations.groupby(["market_regime", "surface_label"]):
+            if len(group) < 50:
+                continue
+            surface_by_regime.append({
+                "market_regime": regime_label,
+                "surface_label": surface_label,
+                "observations": int(len(group)),
+                "hit_rate": _safe_round(group["target_hit"].mean()),
+                "avg_score": _safe_round(group["score"].mean(), 2),
+                "avg_end_return_pct": _safe_round(group["end_return_pct"].mean()),
+            })
+    surface_by_regime = sorted(surface_by_regime, key=lambda row: (row["market_regime"], row["surface_label"]))
+
+    component_summary = {
+        "avg_raw_score": _safe_round(observations["raw_score"].mean(), 2) if "raw_score" in observations.columns else None,
+        "avg_context_adjustment": _safe_round(observations["context_adjustment"].mean(), 2) if "context_adjustment" in observations.columns else None,
+        "avg_surface_score": _safe_round(observations["surface_score"].mean(), 2) if "surface_score" in observations.columns else None,
+        "avg_continuation_score": _safe_round(observations["continuation_score"].mean(), 2) if "continuation_score" in observations.columns else None,
+        "avg_rebound_score": _safe_round(observations["rebound_score"].mean(), 2) if "rebound_score" in observations.columns else None,
+    }
+
+    return {
+        "status": "ok",
+        "surface_label_distribution": distribution,
+        "surface_label_metrics": label_metrics,
+        "surface_by_regime": surface_by_regime,
+        "score_component_summary": component_summary,
+    }
 
 def _regime_slice_rows(observations: pd.DataFrame, min_obs: int) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
@@ -511,6 +918,7 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
                 "violations": [],
             },
             "discrimination_report": empty_diag,
+            "surface_feature_report": {"status": "empty", "surface_label_distribution": {}, "surface_label_metrics": [], "surface_by_regime": [], "score_component_summary": {}},
             "replay_summary_extra": {
                 "observation_count": 0,
                 "eligible_for_probability_display": False,
@@ -575,6 +983,7 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
     quantile_lift_table = _quantile_lift_rows(observations, bins=10)
     regime_slice_metrics = _regime_slice_rows(observations, settings.replay_min_regime_slice_observations)
     monotonicity = _monotonicity_diagnostics(score_band_metrics, settings.replay_monotonicity_tolerance)
+    surface_feature_report = _build_surface_feature_report(observations)
 
     enough_obs = len(observations) >= settings.calibration_min_observations
     enough_bands = all(row["observations"] >= settings.calibration_min_band_size for row in score_band_metrics if row["observations"] > 0)
@@ -648,6 +1057,7 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
         "regime_slice_metrics": regime_slice_metrics,
         "monotonicity_diagnostics": monotonicity,
         "discrimination_report": discrimination_report,
+        "surface_feature_report": surface_feature_report,
         "replay_summary_extra": {
             "observation_count": int(len(observations)),
             "brier_score": _safe_round(brier),
@@ -663,6 +1073,8 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
             "discrimination_validation_reason": " | ".join(discrimination_report["reasons"][:3]),
             "calibration_min_observations": settings.calibration_min_observations,
             "calibration_min_band_size": settings.calibration_min_band_size,
+            "surface_label_distribution": surface_feature_report.get("surface_label_distribution", {}),
+            "avg_surface_score": surface_feature_report.get("score_component_summary", {}).get("avg_surface_score"),
         },
     }
 
@@ -764,7 +1176,12 @@ def _run_replay_thread(replay_id: str) -> None:
                 if math.isnan(raw_score):
                     continue
                 context_adjustment, adj_reasons, adj_risks = _context_adjustment(metrics, regime_metrics)
-                score = round(max(0.0, min(100.0, raw_score + context_adjustment)), 2)
+                surface_metrics = _surface_feature_metrics(hist, spy_hist, sector_hist)
+                continuation_score, continuation_reasons, continuation_risks = _score_continuation_surface(metrics, surface_metrics, regime_metrics)
+                rebound_score, rebound_reasons, rebound_risks = _score_rebound_surface(metrics, surface_metrics, regime_metrics)
+                score, surface_score, surface_label = _blend_surface_score_v22(float(raw_score), float(continuation_score), float(rebound_score), float(context_adjustment), regime_metrics)
+                surface_reasons = continuation_reasons if surface_label == "continuation" else rebound_reasons if surface_label == "rebound" else (continuation_reasons[:2] + rebound_reasons[:2])
+                surface_risks = continuation_risks if surface_label == "continuation" else rebound_risks if surface_label == "rebound" else (continuation_risks[:2] + rebound_risks[:2])
                 entry_price = float(hist["Close"].iloc[-1])
                 outcome = _evaluate_forward_outcome(frame, snapshot_date, entry_price, settings.outcome_target_up_pct, settings.outcome_stop_down_pct, settings.outcome_horizon_days)
                 snapshot_rows.append({
@@ -779,11 +1196,16 @@ def _run_replay_thread(replay_id: str) -> None:
                     "benchmark_volatility20": regime_metrics.get("benchmark_volatility20"),
                     "raw_score": round(float(raw_score), 2),
                     "context_adjustment": context_adjustment,
+                    "surface_score": surface_score,
+                    "continuation_score": continuation_score,
+                    "rebound_score": rebound_score,
+                    "surface_label": surface_label,
                     "score": score,
                     "entry_price": round(entry_price, 4),
-                    "technical_summary": summary,
-                    "reason_codes": " | ".join((reasons + adj_reasons)[:5]) if (reasons or adj_reasons) else "No explicit timing reasons",
-                    "risk_flags": " | ".join((risks + adj_risks)[:5]) if (risks or adj_risks) else "None identified",
+                    "technical_summary": f"{summary}; surface {surface_label}",
+                    "reason_codes": " | ".join((reasons + adj_reasons + surface_reasons)[:6]) if (reasons or adj_reasons or surface_reasons) else "No explicit timing reasons",
+                    "risk_flags": " | ".join((risks + adj_risks + surface_risks)[:6]) if (risks or adj_risks or surface_risks) else "None identified",
+                    **surface_metrics,
                     **outcome,
                 })
             snapshot_rows = sorted(snapshot_rows, key=lambda item: item["score"], reverse=True)
@@ -811,10 +1233,11 @@ def _run_replay_thread(replay_id: str) -> None:
         regime_slice_metrics = calibration_outputs["regime_slice_metrics"]
         monotonicity_diagnostics = calibration_outputs["monotonicity_diagnostics"]
         discrimination_report = calibration_outputs["discrimination_report"]
+        surface_feature_report = calibration_outputs["surface_feature_report"]
         replay_extra = calibration_outputs["replay_summary_extra"]
         parity_assessment = {
             "replay_mode": replay_mode,
-            "replay_surface": "context_adjusted_timing_v2_1",
+            "replay_surface": "feature_surface_hardened_v2_2",
             "parity_status": replay_extra.get("parity_status"),
             "eligible_for_probability_display": replay_extra.get("eligible_for_probability_display"),
             "eligibility_reason": replay_extra.get("eligibility_reason"),
@@ -822,7 +1245,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "discrimination_validation_reason": replay_extra.get("discrimination_validation_reason"),
             "limitations": [
                 "Replay still uses timing-only historical inputs because point-in-time fundamentals and news are not available from the current provider stack.",
-                "V2.1 adds context-adjusted timing replay and stronger validation gates, but this is still not the full live composite score.",
+                "V2.2 hardens the timing replay surface with continuation/rebound feature blending and stronger context diagnostics, but this is still not the full live composite score.",
                 "Do not label live scanner scores as calibrated probabilities until full-parity replay exists and calibration thresholds are met.",
             ],
         }
@@ -832,7 +1255,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "ended_at": utc_now_iso(),
             "provider": provider.provider_name,
             "replay_mode": replay_mode,
-            "replay_surface": "context_adjusted_timing_v2_1",
+            "replay_surface": "feature_surface_hardened_v2_2",
             "universe_size_loaded": len(universe_rows),
             "snapshot_count_requested": min(len(spy_history.index[settings.replay_warmup_days : len(spy_history) - settings.outcome_horizon_days][:: max(step,1)]), settings.replay_max_snapshots),
             "snapshot_count_completed": int(obs_df["snapshot_date"].nunique()) if not obs_df.empty else 0,
@@ -851,14 +1274,14 @@ def _run_replay_thread(replay_id: str) -> None:
                 "build_timestamp_utc": settings.build_timestamp_utc,
                 "artifact_schema_version": settings.artifact_schema_version,
             },
-            "note": "This V2.1 build hardens replay discrimination with context-adjusted timing replay, regime slicing, and monotonicity gates. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
+            "note": "This V2.2 build hardens replay feature-surface discrimination with continuation/rebound blending, regime slicing, and monotonicity gates. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
         }
 
         manifest = {
             "replay_id": replay_id,
             "required_artifacts": sorted(REQUIRED_REPLAY_ARTIFACTS),
             "replay_mode": replay_mode,
-            "replay_surface": "context_adjusted_timing_v2_1",
+            "replay_surface": "feature_surface_hardened_v2_2",
             "build": replay_summary["build"],
         }
         write_json(run_dir / "replay_summary.json", replay_summary)
@@ -870,6 +1293,7 @@ def _run_replay_thread(replay_id: str) -> None:
         write_csv(run_dir / "regime_slice_metrics.csv", regime_slice_metrics)
         write_json(run_dir / "discrimination_report.json", discrimination_report)
         write_json(run_dir / "monotonicity_diagnostics.json", monotonicity_diagnostics)
+        write_json(run_dir / "surface_feature_report.json", surface_feature_report)
         write_text(run_dir / "validation_log.txt", "\n".join(log_lines + [f"[{utc_now_iso()}] Replay completed successfully"]))
         write_json(run_dir / "config_used.json", {
             "replay_ticker_limit": settings.replay_ticker_limit,
