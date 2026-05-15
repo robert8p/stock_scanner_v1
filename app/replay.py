@@ -1033,7 +1033,7 @@ def _policy_pass_status(row: Dict[str, Any], settings) -> Tuple[str, List[str]]:
         if row["observations"] >= settings.replay_policy_min_observations and row["snapshot_count"] >= settings.replay_policy_min_snapshots and (row["lift_vs_all"] or 0) > 0 and (row["avg_end_return_pct"] or 0) > 0:
             return "watchlist", reasons
         return "fail", reasons
-    return "pass", ["Policy passes the V2.3 elite-policy gates. This is a historical policy gate, not a calibrated probability."]
+    return "pass", ["Policy passes the V2.4 elite-policy gates. This is a historical policy gate, not a calibrated probability."]
 
 
 def _build_elite_policy_outputs(observations: pd.DataFrame, settings) -> Dict[str, Any]:
@@ -1166,7 +1166,7 @@ def _build_elite_policy_outputs(observations: pd.DataFrame, settings) -> Dict[st
             "Prefer policies marked pass; treat watchlist policies as research candidates only.",
             "Do not treat the whole top 20 as equivalent if only top-3/top-5 or score-threshold policies pass.",
         ],
-        "note": "V2.3 validates elite policy gates over timing-only replay. It does not authorize calibrated live probabilities for the full composite score.",
+        "note": "V2.4 validates elite policy gates over timing-only replay. It does not authorize calibrated live probabilities for the full composite score.",
     }
     return {"leaderboard": leaderboard, "report": report}
 
@@ -1524,7 +1524,7 @@ def _run_replay_thread(replay_id: str) -> None:
         replay_extra = calibration_outputs["replay_summary_extra"]
         parity_assessment = {
             "replay_mode": replay_mode,
-            "replay_surface": "elite_policy_validation_v2_3",
+            "replay_surface": "elite_policy_validation_v2_4",
             "parity_status": replay_extra.get("parity_status"),
             "eligible_for_probability_display": replay_extra.get("eligible_for_probability_display"),
             "eligibility_reason": replay_extra.get("eligibility_reason"),
@@ -1532,7 +1532,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "discrimination_validation_reason": replay_extra.get("discrimination_validation_reason"),
             "limitations": [
                 "Replay still uses timing-only historical inputs because point-in-time fundamentals and news are not available from the current provider stack.",
-                "V2.3 validates elite policy gates such as top-3/top-5 and score-threshold slices, but this is still not the full live composite score.",
+                "V2.4 validates elite policy gates such as top-3/top-5 and score-threshold slices, but this is still not the full live composite score.",
                 "Do not label live scanner scores as calibrated probabilities until full-parity replay exists and calibration thresholds are met.",
             ],
         }
@@ -1542,7 +1542,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "ended_at": utc_now_iso(),
             "provider": provider.provider_name,
             "replay_mode": replay_mode,
-            "replay_surface": "elite_policy_validation_v2_3",
+            "replay_surface": "elite_policy_validation_v2_4",
             "universe_size_loaded": len(universe_rows),
             "snapshot_count_requested": min(len(spy_history.index[settings.replay_warmup_days : len(spy_history) - settings.outcome_horizon_days][:: max(step,1)]), settings.replay_max_snapshots),
             "snapshot_count_completed": int(obs_df["snapshot_date"].nunique()) if not obs_df.empty else 0,
@@ -1561,14 +1561,14 @@ def _run_replay_thread(replay_id: str) -> None:
                 "build_timestamp_utc": settings.build_timestamp_utc,
                 "artifact_schema_version": settings.artifact_schema_version,
             },
-            "note": "This V2.3 build validates elite policy gates over the replay surface. It produces a policy leaderboard, not calibrated live probabilities. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
+            "note": "This V2.4 build validates elite policy gates over the replay surface. It produces a policy leaderboard, not calibrated live probabilities. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
         }
 
         manifest = {
             "replay_id": replay_id,
             "required_artifacts": sorted(REQUIRED_REPLAY_ARTIFACTS),
             "replay_mode": replay_mode,
-            "replay_surface": "elite_policy_validation_v2_3",
+            "replay_surface": "elite_policy_validation_v2_4",
             "build": replay_summary["build"],
         }
         write_json(run_dir / "replay_summary.json", replay_summary)

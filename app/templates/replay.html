@@ -3,7 +3,7 @@
 <section class="hero-grid">
   <div class="card">
     <h2>Replay / Calibration</h2>
-    <p>Run a historical replay over daily snapshots to test whether elite policies — top 3, top 5, score thresholds, regime gates and surface gates — outperform the full replay universe. V2.3 produces a policy leaderboard, not calibrated probabilities.</p>
+    <p>Run a historical replay over daily snapshots to test whether elite policies — top 3, top 5, score thresholds, regime gates and surface gates — outperform the full replay universe. V2.4 produces a policy leaderboard, not calibrated probabilities.</p>
     <button id="run-replay-btn" class="primary-btn">Run Replay</button>
     <p class="subtle">Replay mode: {{ settings.replay_default_mode }} · Universe cap: {{ settings.replay_ticker_limit }} · Max snapshots: {{ settings.replay_max_snapshots }} · Horizon: {{ settings.outcome_horizon_days }} trading days</p>
     <div id="replay-feedback" class="status-box">Ready</div>
@@ -13,7 +13,7 @@
   <div class="card emphasis">
     <h2>Calibration truth boundary</h2>
     <ul>
-      <li>This V2.3 build validates elite policy gates.</li>
+      <li>This V2.4 build validates elite policy gates.</li>
       <li>It still does not authorize live probability labels for the full composite score.</li>
       <li>Use policy pass/watchlist/fail status to decide which slices deserve manual review.</li>
       <li>Probability display stays disabled until replay parity includes point-in-time structural and catalyst inputs.</li>

@@ -82,6 +82,19 @@ def init_db() -> None:
                 data_quality_label TEXT,
                 price_last_timestamp TEXT,
                 news_last_timestamp TEXT,
+                replay_surface_score REAL,
+                replay_surface_label TEXT,
+                replay_surface_rank INTEGER,
+                market_regime TEXT,
+                live_policy_label TEXT,
+                live_policy_badges_json TEXT,
+                live_policy_ids_json TEXT,
+                live_policy_watchlist_ids_json TEXT,
+                live_policy_warning TEXT,
+                live_policy_risk_flags_json TEXT,
+                live_policy_match_count INTEGER,
+                live_policy_risk_adjusted_match_count INTEGER,
+                live_policy_reference_stop_rate REAL,
                 PRIMARY KEY (run_id, ticker)
             )
             """
@@ -107,6 +120,32 @@ def init_db() -> None:
             cur.execute("ALTER TABLE candidates ADD COLUMN price_last_timestamp TEXT")
         if "news_last_timestamp" not in existing_candidate_cols:
             cur.execute("ALTER TABLE candidates ADD COLUMN news_last_timestamp TEXT")
+        if "replay_surface_score" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN replay_surface_score REAL")
+        if "replay_surface_label" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN replay_surface_label TEXT")
+        if "replay_surface_rank" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN replay_surface_rank INTEGER")
+        if "market_regime" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN market_regime TEXT")
+        if "live_policy_label" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_label TEXT")
+        if "live_policy_badges_json" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_badges_json TEXT")
+        if "live_policy_ids_json" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_ids_json TEXT")
+        if "live_policy_watchlist_ids_json" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_watchlist_ids_json TEXT")
+        if "live_policy_warning" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_warning TEXT")
+        if "live_policy_risk_flags_json" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_risk_flags_json TEXT")
+        if "live_policy_match_count" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_match_count INTEGER")
+        if "live_policy_risk_adjusted_match_count" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_risk_adjusted_match_count INTEGER")
+        if "live_policy_reference_stop_rate" not in existing_candidate_cols:
+            cur.execute("ALTER TABLE candidates ADD COLUMN live_policy_reference_stop_rate REAL")
 
         cur.execute(
             """
@@ -275,7 +314,7 @@ def deserialize_run(run: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 def deserialize_candidate(candidate: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not candidate:
         return None
-    for key in ["reason_codes_json", "risk_flags_json", "latest_news_json", "feature_snapshot_json"]:
+    for key in ["reason_codes_json", "risk_flags_json", "latest_news_json", "feature_snapshot_json", "live_policy_badges_json", "live_policy_ids_json", "live_policy_watchlist_ids_json", "live_policy_risk_flags_json"]:
         value = candidate.get(key)
         base = key[:-5]
         if isinstance(value, str) and value:

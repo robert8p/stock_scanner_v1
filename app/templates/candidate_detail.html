@@ -7,12 +7,18 @@
     <p><strong>Overall opportunity score:</strong> {{ '%.2f'|format(candidate.overall_score) }} ({{ candidate.confidence_band }})</p>
     <p><strong>Opportunity type:</strong> {{ candidate.opportunity_type }}</p>
     <p><strong>Catalyst truth:</strong> {{ candidate.catalyst_truth_label }}</p>
+    <p><strong>Live elite-policy overlay:</strong> {{ candidate.live_policy_label or 'No validated elite policy' }}{% if candidate.live_policy_warning %} — {{ candidate.live_policy_warning }}{% endif %}</p>
+    {% if candidate.live_policy_badges %}<p><strong>Policy badges:</strong> {{ candidate.live_policy_badges | join(' · ') }}</p>{% endif %}
     <div class="metric-grid">
       <div class="metric-card"><span>Structural</span><strong>{{ '%.2f'|format(candidate.structural_score) }}</strong></div>
       <div class="metric-card"><span>Catalyst</span><strong>{{ '%.2f'|format(candidate.catalyst_score) }}</strong></div>
       <div class="metric-card"><span>Timing</span><strong>{{ '%.2f'|format(candidate.timing_score) }}</strong></div>
       <div class="metric-card"><span>High-credibility headlines</span><strong>{{ candidate.catalyst_high_credibility_count }}</strong></div>
       <div class="metric-card"><span>Low-signal ratio</span><strong>{{ '%.2f'|format(candidate.catalyst_low_signal_ratio or 0) }}</strong></div>
+      <div class="metric-card"><span>Replay surface</span><strong>{{ candidate.replay_surface_score or 'n/a' }}</strong></div>
+      <div class="metric-card"><span>Surface rank</span><strong>{{ candidate.replay_surface_rank or 'n/a' }}</strong></div>
+      <div class="metric-card"><span>Surface type</span><strong>{{ candidate.replay_surface_label or 'unknown' }}</strong></div>
+      <div class="metric-card"><span>Regime</span><strong>{{ candidate.market_regime or 'unknown' }}</strong></div>
     </div>
     <p><strong>Technical summary:</strong> {{ candidate.technical_summary }}</p>
     <p><strong>Fundamental summary:</strong> {{ candidate.fundamental_summary }}</p>
@@ -28,6 +34,14 @@
     <ul>
       {% for risk in candidate.risk_flags or [] %}
       <li>{{ risk }}</li>
+      {% endfor %}
+    </ul>
+    <h2>Policy overlay risk flags</h2>
+    <ul>
+      {% for risk in candidate.live_policy_risk_flags or [] %}
+      <li>{{ risk }}</li>
+      {% else %}
+      <li>No policy-specific risk flags.</li>
       {% endfor %}
     </ul>
   </div>

@@ -13,11 +13,20 @@ from uuid import uuid4
 import pandas as pd
 
 from .config import load_settings
-from .db import deserialize_candidate, deserialize_run, init_db, list_candidates, list_runs, replace_candidates, upsert_run, upsert_shortlist_outcomes, list_shortlist_outcomes, summarize_shortlist_outcomes
+from .db import deserialize_candidate, deserialize_replay_run, deserialize_run, get_latest_replay_run, init_db, list_candidates, list_runs, replace_candidates, upsert_run, upsert_shortlist_outcomes, list_shortlist_outcomes, summarize_shortlist_outcomes
 from .providers import get_provider
 from .providers.base import TickerDataBundle
 from .scoring import SECTOR_ETF_MAP, compute_timing_metrics, confidence_band, normalize_sector_name, score_catalyst, score_structural, score_timing
 from .storage import ensure_dir, sanitize_row, utc_now_iso, write_csv, write_json, write_text, zip_directory
+from .replay import (
+    ELITE_POLICY_DEFINITIONS,
+    _benchmark_regime_metrics,
+    _blend_surface_score_v22,
+    _context_adjustment,
+    _score_continuation_surface,
+    _score_rebound_surface,
+    _surface_feature_metrics,
+)
 from .universe import load_universe
 
 
@@ -406,6 +415,19 @@ def _serialize_candidate_row(row: Dict[str, Any], sort_mode: str = 'catalyst_fir
         'data_quality_label': source.get('data_quality_label'),
         'price_last_timestamp': source.get('price_last_timestamp'),
         'news_last_timestamp': source.get('news_last_timestamp'),
+        'replay_surface_score': source.get('replay_surface_score'),
+        'replay_surface_label': source.get('replay_surface_label'),
+        'replay_surface_rank': source.get('replay_surface_rank'),
+        'market_regime': source.get('market_regime'),
+        'live_policy_label': source.get('live_policy_label'),
+        'live_policy_badges': source.get('live_policy_badges') or [],
+        'live_policy_ids': source.get('live_policy_ids') or [],
+        'live_policy_watchlist_ids': source.get('live_policy_watchlist_ids') or [],
+        'live_policy_warning': source.get('live_policy_warning'),
+        'live_policy_risk_flags': source.get('live_policy_risk_flags') or [],
+        'live_policy_match_count': source.get('live_policy_match_count') or 0,
+        'live_policy_risk_adjusted_match_count': source.get('live_policy_risk_adjusted_match_count') or 0,
+        'live_policy_reference_stop_rate': source.get('live_policy_reference_stop_rate'),
         'reason_codes': source.get('reason_codes') or [],
         'risk_flags': source.get('risk_flags') or [],
         'latest_news': source.get('latest_news') or [],
@@ -425,6 +447,7 @@ def _artifact_integrity_report(run_dir: Path, ranked_csv_rows: List[Dict[str, An
         'scan_summary.json', 'coverage_diagnostics.json', 'score_diagnostics.json', 'shortlist_views.json',
         'artifact_manifest.json', 'ranked_candidates.csv', 'ranked_candidates.json', 'reasons_by_ticker.json',
         'raw_or_normalized_feature_snapshot.csv', 'config_used.json', 'scan_log.txt', 'outcome_tracking_summary.json',
+        'live_policy_overlay_report.json', 'policy_eligible_candidates.csv',
     ]
     present = sorted(p.name for p in run_dir.iterdir() if p.is_file())
     issues = []
@@ -702,6 +725,13 @@ def _shortlist_views_payload(rows: List[Dict[str, Any]], shortlist_size: int) ->
                     "catalyst_support_level": row.get("catalyst_support_level"),
                     "view_bucket": row.get("view_bucket"),
                     "confidence_band": row.get("confidence_band"),
+                    "replay_surface_score": row.get("replay_surface_score"),
+                    "replay_surface_label": row.get("replay_surface_label"),
+                    "replay_surface_rank": row.get("replay_surface_rank"),
+                    "market_regime": row.get("market_regime"),
+                    "live_policy_label": row.get("live_policy_label"),
+                    "live_policy_badges": row.get("live_policy_badges") or [],
+                    "live_policy_warning": row.get("live_policy_warning"),
                 }
                 for row in shortlisted
             ],
@@ -743,6 +773,273 @@ def _score_diagnostics(rows: List[Dict[str, Any]], shortlist_size: int) -> Dict[
         for mode in SORT_MODE_LABELS
     }
     return payload
+
+
+
+
+def _compute_live_replay_surface(
+    price_history: Optional[pd.DataFrame],
+    benchmark_spy: Optional[pd.DataFrame],
+    sector_history: Optional[pd.DataFrame],
+    timing_metrics: Dict[str, Any],
+    raw_timing_score: float,
+) -> Dict[str, Any]:
+    """Compute the replay-style timing surface for a live candidate.
+
+    This is deliberately separate from the live composite score. It allows the live
+    scanner to say whether a candidate resembles the historical elite replay slices
+    without pretending the full composite score has been calibrated.
+    """
+    try:
+        if price_history is None or price_history.empty or benchmark_spy is None or benchmark_spy.empty:
+            raise ValueError("Insufficient history for live replay-surface score")
+        regime = _benchmark_regime_metrics(benchmark_spy)
+        surface = _surface_feature_metrics(price_history, benchmark_spy, sector_history)
+        context_adjustment, context_reasons, context_risks = _context_adjustment(timing_metrics, regime)
+        continuation_score, continuation_reasons, continuation_risks = _score_continuation_surface(timing_metrics, surface, regime)
+        rebound_score, rebound_reasons, rebound_risks = _score_rebound_surface(timing_metrics, surface, regime)
+        replay_surface_score, surface_score, surface_label = _blend_surface_score_v22(
+            float(raw_timing_score or 0.0), continuation_score, rebound_score, context_adjustment, regime
+        )
+        return {
+            "available": True,
+            "replay_surface_score": replay_surface_score,
+            "surface_score": surface_score,
+            "replay_surface_label": surface_label,
+            "market_regime": regime.get("regime_label") or "unknown",
+            "benchmark_regime": regime,
+            "surface_features": surface,
+            "context_adjustment": context_adjustment,
+            "continuation_score": continuation_score,
+            "rebound_score": rebound_score,
+            "surface_reasons": list(dict.fromkeys(context_reasons + continuation_reasons + rebound_reasons))[:6],
+            "surface_risks": list(dict.fromkeys(context_risks + continuation_risks + rebound_risks))[:6],
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "replay_surface_score": None,
+            "surface_score": None,
+            "replay_surface_label": "unknown",
+            "market_regime": "unknown",
+            "benchmark_regime": {},
+            "surface_features": {},
+            "context_adjustment": None,
+            "continuation_score": None,
+            "rebound_score": None,
+            "surface_reasons": [],
+            "surface_risks": [f"Live replay-surface score unavailable: {exc}"],
+        }
+
+
+def _load_latest_elite_policy_source() -> Dict[str, Any]:
+    """Read the latest completed replay policy leaderboard from persistent disk.
+
+    V2.4 intentionally uses only policies that the latest replay marked as pass for
+    live policy badges. Watchlist policies are surfaced separately and do not count
+    as risk-adjusted eligible.
+    """
+    latest = deserialize_replay_run(get_latest_replay_run())
+    if not latest or latest.get("status") != "completed":
+        return {
+            "status": "unavailable",
+            "reason": "No completed replay policy source available. Run Replay / Calibration first.",
+            "replay_id": latest.get("replay_id") if latest else None,
+            "passed_policy_ids": [],
+            "watchlist_policy_ids": [],
+            "policy_rows_by_id": {},
+        }
+    artifacts_dir = Path(latest.get("artifacts_dir") or "")
+    leaderboard_path = artifacts_dir / "elite_policy_leaderboard.csv"
+    if not leaderboard_path.exists():
+        return {
+            "status": "unavailable",
+            "reason": "Latest replay has no elite_policy_leaderboard.csv artifact.",
+            "replay_id": latest.get("replay_id"),
+            "passed_policy_ids": [],
+            "watchlist_policy_ids": [],
+            "policy_rows_by_id": {},
+        }
+    try:
+        rows = pd.read_csv(leaderboard_path).to_dict(orient="records")
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "reason": f"Could not read elite policy leaderboard: {exc}",
+            "replay_id": latest.get("replay_id"),
+            "passed_policy_ids": [],
+            "watchlist_policy_ids": [],
+            "policy_rows_by_id": {},
+        }
+    policy_rows_by_id = {str(row.get("policy_id")): row for row in rows if row.get("policy_id")}
+    passed = [pid for pid, row in policy_rows_by_id.items() if str(row.get("validation_status")).lower() == "pass"]
+    watchlist = [pid for pid, row in policy_rows_by_id.items() if str(row.get("validation_status")).lower() == "watchlist"]
+    return {
+        "status": "available" if passed or watchlist else "available_no_passes",
+        "reason": "Latest completed replay policy leaderboard loaded.",
+        "replay_id": latest.get("replay_id"),
+        "replay_build": (latest.get("summary") or {}).get("build"),
+        "replay_surface": (latest.get("summary") or {}).get("replay_surface"),
+        "passed_policy_ids": passed,
+        "watchlist_policy_ids": watchlist,
+        "policy_rows_by_id": policy_rows_by_id,
+    }
+
+
+def _policy_live_match(row: Dict[str, Any], policy: Dict[str, Any]) -> bool:
+    score = row.get("replay_surface_score")
+    rank = row.get("replay_surface_rank")
+    if policy.get("top_n") is not None:
+        if rank is None or int(rank) > int(policy["top_n"]):
+            return False
+    if policy.get("min_score") is not None:
+        if score is None or float(score) < float(policy["min_score"]):
+            return False
+    if policy.get("market_regime"):
+        if str(row.get("market_regime") or "unknown") != str(policy["market_regime"]):
+            return False
+    if policy.get("surface_label"):
+        if str(row.get("replay_surface_label") or "unknown") != str(policy["surface_label"]):
+            return False
+    return True
+
+
+def _policy_risk_flags(row: Dict[str, Any], policy_source: Dict[str, Any], settings) -> List[str]:
+    risks: List[str] = []
+    if not row.get("replay_surface_score"):
+        risks.append("No live replay-surface score available")
+    if row.get("data_quality_label") == "Thin":
+        risks.append("Evidence quality is thin")
+    if settings.live_policy_require_moderate_data_quality and row.get("data_quality_label") not in {"High", "Moderate"}:
+        risks.append("Data quality below policy overlay threshold")
+    if float(row.get("evidence_completeness_pct") or 0.0) < float(settings.min_core_feature_coverage_pct):
+        risks.append("Evidence completeness below policy overlay threshold")
+    existing_risks = []
+    try:
+        existing_risks = json.loads(row.get("risk_flags_json") or "[]")
+    except Exception:
+        existing_risks = []
+    risk_text = " | ".join(str(x).lower() for x in existing_risks)
+    hard_terms = ["stale", "missing price history", "sector-relative strength unavailable", "rsi looks stretched", "very close to 52-week highs", "far below 52-week highs", "price below 200-day", "negative 3-month momentum"]
+    for term in hard_terms:
+        if term in risk_text:
+            risks.append(f"Policy risk: {term}")
+    if policy_source.get("status") not in {"available", "available_no_passes"}:
+        risks.append("No completed replay policy source loaded")
+    return list(dict.fromkeys(risks))[:8]
+
+
+def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> Dict[str, Any]:
+    policy_source = _load_latest_elite_policy_source()
+    definitions_by_id = {policy["policy_id"]: policy for policy in ELITE_POLICY_DEFINITIONS}
+    passed_ids = [pid for pid in policy_source.get("passed_policy_ids", []) if pid in definitions_by_id]
+    watchlist_ids = [pid for pid in policy_source.get("watchlist_policy_ids", []) if pid in definitions_by_id]
+    policy_rows_by_id = policy_source.get("policy_rows_by_id", {}) or {}
+
+    surface_ranked = sorted(
+        [row for row in ranked_rows if row.get("replay_surface_score") is not None],
+        key=lambda row: float(row.get("replay_surface_score") or -1.0),
+        reverse=True,
+    )
+    for idx, row in enumerate(surface_ranked, start=1):
+        row["replay_surface_rank"] = idx
+    no_surface = [row for row in ranked_rows if row.get("replay_surface_score") is None]
+    for row in no_surface:
+        row["replay_surface_rank"] = None
+
+    pass_counts: Dict[str, int] = {pid: 0 for pid in passed_ids}
+    watch_counts: Dict[str, int] = {pid: 0 for pid in watchlist_ids}
+    high_composite_no_policy = 0
+    risk_rejected_count = 0
+    eligible_count = 0
+
+    for row in ranked_rows:
+        raw_pass_ids = [pid for pid in passed_ids if _policy_live_match(row, definitions_by_id[pid])]
+        raw_watch_ids = [pid for pid in watchlist_ids if _policy_live_match(row, definitions_by_id[pid])]
+        for pid in raw_pass_ids:
+            pass_counts[pid] = pass_counts.get(pid, 0) + 1
+        for pid in raw_watch_ids:
+            watch_counts[pid] = watch_counts.get(pid, 0) + 1
+
+        risks = _policy_risk_flags(row, policy_source, settings)
+        elevated_stop_refs = []
+        ref_stop_rates = []
+        for pid in raw_pass_ids:
+            policy_row = policy_rows_by_id.get(pid, {})
+            stop_rate = policy_row.get("stop_rate")
+            try:
+                if stop_rate is not None and not pd.isna(stop_rate):
+                    stop_rate_f = float(stop_rate)
+                    ref_stop_rates.append(stop_rate_f)
+                    if stop_rate_f > float(settings.live_policy_max_policy_stop_rate):
+                        elevated_stop_refs.append(f"{pid} historical stop rate {stop_rate_f:.1%}")
+            except Exception:
+                pass
+        risks.extend(elevated_stop_refs[:3])
+        risks = list(dict.fromkeys(risks))[:8]
+        risk_adjusted_ids = [] if risks else raw_pass_ids
+        if raw_pass_ids and risks:
+            risk_rejected_count += 1
+        if risk_adjusted_ids:
+            eligible_count += 1
+
+        badges = []
+        for pid in risk_adjusted_ids[:4]:
+            policy_row = policy_rows_by_id.get(pid, {})
+            badges.append(policy_row.get("label") or definitions_by_id[pid].get("label") or pid)
+        watch_badges = []
+        for pid in raw_watch_ids[:3]:
+            policy_row = policy_rows_by_id.get(pid, {})
+            watch_badges.append(policy_row.get("label") or definitions_by_id[pid].get("label") or pid)
+
+        warning = ""
+        if raw_pass_ids and risks:
+            warning = "Matched a validated elite policy, but failed live risk-adjustment checks."
+        elif not raw_pass_ids and (int(row.get("rank") or 999999) <= int(settings.live_policy_high_composite_rank_warning) or float(row.get("overall_score") or 0.0) >= 70.0):
+            warning = "High live composite rank/score but no validated elite-policy match."
+            high_composite_no_policy += 1
+        elif raw_watch_ids and not raw_pass_ids:
+            warning = "Only watchlist-level policy resemblance; not a validated pass."
+        elif not raw_pass_ids and not raw_watch_ids:
+            warning = "No validated elite-policy match."
+
+        if risk_adjusted_ids:
+            label = "Validated elite-policy pass"
+        elif raw_pass_ids:
+            label = "Policy match rejected by live risk gates"
+        elif raw_watch_ids:
+            label = "Policy watchlist resemblance"
+        else:
+            label = "No validated elite policy"
+
+        row["live_policy_label"] = label
+        row["live_policy_badges_json"] = json.dumps(badges)
+        row["live_policy_ids_json"] = json.dumps(risk_adjusted_ids)
+        row["live_policy_watchlist_ids_json"] = json.dumps(raw_watch_ids)
+        row["live_policy_warning"] = warning
+        row["live_policy_risk_flags_json"] = json.dumps(risks)
+        row["live_policy_match_count"] = len(raw_pass_ids)
+        row["live_policy_risk_adjusted_match_count"] = len(risk_adjusted_ids)
+        row["live_policy_reference_stop_rate"] = round(min(ref_stop_rates), 4) if ref_stop_rates else None
+
+    return {
+        "status": "ok",
+        "policy_source": {k: v for k, v in policy_source.items() if k != "policy_rows_by_id"},
+        "ranked_count": len(ranked_rows),
+        "surface_scored_count": len(surface_ranked),
+        "eligible_count": eligible_count,
+        "raw_policy_match_count": sum(1 for row in ranked_rows if int(row.get("live_policy_match_count") or 0) > 0),
+        "risk_rejected_count": risk_rejected_count,
+        "watchlist_match_count": sum(1 for row in ranked_rows if row.get("live_policy_watchlist_ids_json") not in {None, "[]"}),
+        "high_composite_no_policy_count": high_composite_no_policy,
+        "passed_policy_match_counts": pass_counts,
+        "watchlist_policy_match_counts": watch_counts,
+        "operator_guidance": [
+            "Live policy badges show resemblance to historical elite replay policies; they are not calibrated probabilities.",
+            "Only candidates with risk-adjusted validated policy passes appear in policy_eligible_candidates.csv.",
+            "High composite candidates without policy badges should still be reviewed manually but should not be treated as replay-validated.",
+        ],
+    }
 
 def run_scan_now(request_key: Optional[str] = None) -> str:
     global LAST_SCAN_STARTED_AT, LAST_IDEMPOTENCY_KEY
@@ -844,6 +1141,7 @@ def _run_scan_thread(run_id: str) -> None:
             timing_score, timing_reasons, timing_risks, technical_summary = score_timing(timing_metrics)
             structural_score, structural_reasons, structural_risks, fundamental_summary = score_structural(bundle)
             catalyst_score, catalyst_reasons, catalyst_risks, catalyst_metrics, prepared_news = score_catalyst(bundle.news, ticker=ticker, company_name=bundle.company_name)
+            live_surface = _compute_live_replay_surface(price_history, benchmark_spy, sector_history, timing_metrics, timing_score)
 
             evidence_quality = _evidence_quality(bundle, timing_metrics, prepared_news, settings)
             combined_reasons = list(dict.fromkeys(structural_reasons + catalyst_reasons + timing_reasons))
@@ -876,12 +1174,25 @@ def _run_scan_thread(run_id: str) -> None:
                 "data_quality_label": evidence_quality.get("data_quality_label"),
                 "price_last_timestamp": evidence_quality.get("price_last_timestamp"),
                 "news_last_timestamp": evidence_quality.get("news_last_timestamp"),
+                "replay_surface_score": live_surface.get("replay_surface_score"),
+                "replay_surface_label": live_surface.get("replay_surface_label"),
+                "replay_surface_rank": None,
+                "market_regime": live_surface.get("market_regime"),
+                "live_policy_label": "Not evaluated yet",
+                "live_policy_badges_json": json.dumps([]),
+                "live_policy_ids_json": json.dumps([]),
+                "live_policy_watchlist_ids_json": json.dumps([]),
+                "live_policy_warning": "Policy overlay not yet evaluated",
+                "live_policy_risk_flags_json": json.dumps(live_surface.get("surface_risks", [])),
+                "live_policy_match_count": 0,
+                "live_policy_risk_adjusted_match_count": 0,
+                "live_policy_reference_stop_rate": None,
                 "reason_codes_json": json.dumps(combined_reasons[:6]),
                 "risk_flags_json": json.dumps(combined_risks[:6]),
                 "latest_news_json": json.dumps(prepared_news[:5]),
                 "technical_summary": technical_summary,
                 "fundamental_summary": fundamental_summary,
-                "feature_snapshot_json": json.dumps({"timing": timing_metrics, "fundamentals": bundle.fundamentals, "catalyst": catalyst_metrics}, default=str),
+                "feature_snapshot_json": json.dumps({"timing": timing_metrics, "fundamentals": bundle.fundamentals, "catalyst": catalyst_metrics, "live_policy_surface": live_surface}, default=str),
             })
             feature_rows.append(sanitize_row({
                 "ticker": ticker,
@@ -904,6 +1215,13 @@ def _run_scan_thread(run_id: str) -> None:
                 "data_quality_label": evidence_quality.get("data_quality_label"),
                 "price_last_timestamp": evidence_quality.get("price_last_timestamp"),
                 "news_last_timestamp": evidence_quality.get("news_last_timestamp"),
+                "replay_surface_score": live_surface.get("replay_surface_score"),
+                "replay_surface_label": live_surface.get("replay_surface_label"),
+                "market_regime": live_surface.get("market_regime"),
+                "surface_score": live_surface.get("surface_score"),
+                "continuation_score": live_surface.get("continuation_score"),
+                "rebound_score": live_surface.get("rebound_score"),
+                "context_adjustment": live_surface.get("context_adjustment"),
                 "price_age_days": evidence_quality.get("price_age_days"),
                 "news_age_days": evidence_quality.get("news_age_days"),
             }))
@@ -919,6 +1237,23 @@ def _run_scan_thread(run_id: str) -> None:
         ranked_rows = sorted(deduped_rows, key=lambda x: x["overall_score"], reverse=True)
         for idx, row in enumerate(ranked_rows, start=1):
             row["rank"] = idx
+        live_policy_overlay_report = _apply_live_policy_overlay(ranked_rows, settings)
+        feature_by_ticker = {row.get("ticker"): row for row in feature_rows}
+        for row in ranked_rows:
+            feature_row = feature_by_ticker.get(row.get("ticker"))
+            if feature_row is not None:
+                feature_row.update({
+                    "replay_surface_rank": row.get("replay_surface_rank"),
+                    "live_policy_label": row.get("live_policy_label"),
+                    "live_policy_badges": " | ".join(json.loads(row.get("live_policy_badges_json") or "[]")),
+                    "live_policy_ids": " | ".join(json.loads(row.get("live_policy_ids_json") or "[]")),
+                    "live_policy_watchlist_ids": " | ".join(json.loads(row.get("live_policy_watchlist_ids_json") or "[]")),
+                    "live_policy_warning": row.get("live_policy_warning"),
+                    "live_policy_risk_flags": " | ".join(json.loads(row.get("live_policy_risk_flags_json") or "[]")),
+                    "live_policy_match_count": row.get("live_policy_match_count"),
+                    "live_policy_risk_adjusted_match_count": row.get("live_policy_risk_adjusted_match_count"),
+                    "live_policy_reference_stop_rate": row.get("live_policy_reference_stop_rate"),
+                })
         replace_candidates(run_id, ranked_rows)
         shortlist_rows = ranked_rows[: settings.shortlist_size]
         shortlist_views = _shortlist_views_payload(ranked_rows, settings.shortlist_size)
@@ -944,6 +1279,9 @@ def _run_scan_thread(run_id: str) -> None:
             "catalyst_low_signal_relevant_count",
             "catalyst_unique_relevant_publishers",
             "catalyst_low_signal_relevant_ratio",
+            "replay_surface_score",
+            "live_policy_match_count",
+            "live_policy_risk_adjusted_match_count",
         ])
         degradation_summary = _run_degradation_assessment(
             feature_rows,
@@ -977,6 +1315,14 @@ def _run_scan_thread(run_id: str) -> None:
                 "weak": sum(1 for row in ranked_rows if row.get("catalyst_support_level") == "weak"),
             },
             "shortlist_view_distributions": {mode: payload["distribution"] for mode, payload in shortlist_views.items()},
+            "live_policy_overlay": {
+                "surface_scored_count": live_policy_overlay_report.get("surface_scored_count"),
+                "eligible_count": live_policy_overlay_report.get("eligible_count"),
+                "raw_policy_match_count": live_policy_overlay_report.get("raw_policy_match_count"),
+                "risk_rejected_count": live_policy_overlay_report.get("risk_rejected_count"),
+                "watchlist_match_count": live_policy_overlay_report.get("watchlist_match_count"),
+                "high_composite_no_policy_count": live_policy_overlay_report.get("high_composite_no_policy_count"),
+            },
             "examples": {
                 "missing_price_history_examples": prefilter_diagnostics.get("missing_price_history_examples", []),
             },
@@ -991,6 +1337,7 @@ def _run_scan_thread(run_id: str) -> None:
         }
         score_diagnostics["data_quality_distribution"] = coverage_diagnostics["data_quality_distribution"]
         score_diagnostics["degradation_summary"] = degradation_summary
+        score_diagnostics["live_policy_overlay"] = live_policy_overlay_report
 
         outcome_rows = _build_outcome_rows(shortlist_rows, bundles, settings)
         upsert_shortlist_outcomes(outcome_rows)
@@ -1026,6 +1373,11 @@ def _run_scan_thread(run_id: str) -> None:
             "warnings": warnings,
             "score_diagnostics": score_diagnostics,
             "shortlist_view_distributions": {mode: payload["distribution"] for mode, payload in shortlist_views.items()},
+            "live_policy_overlay": live_policy_overlay_report,
+            "live_probability_display": {
+                "enabled": False,
+                "reason": "V2.4 adds live elite-policy resemblance badges, not calibrated candidate probabilities.",
+            },
         }
 
         reasons_by_ticker = {
@@ -1036,6 +1388,14 @@ def _run_scan_thread(run_id: str) -> None:
                 "catalyst_truth_label": row.get("catalyst_truth_label"),
                 "catalyst_support_level": row.get("catalyst_support_level"),
                 "opportunity_type": row.get("opportunity_type"),
+                "replay_surface_score": row.get("replay_surface_score"),
+                "replay_surface_label": row.get("replay_surface_label"),
+                "replay_surface_rank": row.get("replay_surface_rank"),
+                "market_regime": row.get("market_regime"),
+                "live_policy_label": row.get("live_policy_label"),
+                "live_policy_badges": json.loads(row.get("live_policy_badges_json") or "[]"),
+                "live_policy_warning": row.get("live_policy_warning"),
+                "live_policy_risk_flags": json.loads(row.get("live_policy_risk_flags_json") or "[]"),
             }
             for row in ranked_rows
         }
@@ -1082,6 +1442,8 @@ def _run_scan_thread(run_id: str) -> None:
                 "config_used.json",
                 "scan_log.txt",
                 "outcome_tracking_summary.json",
+                "live_policy_overlay_report.json",
+                "policy_eligible_candidates.csv",
             ],
             "artifacts_present_before_zip": sorted([p.name for p in run_dir.iterdir() if p.is_file()]),
         }
@@ -1104,6 +1466,9 @@ def _run_scan_thread(run_id: str) -> None:
                 "horizon_days": settings.outcome_horizon_days,
             },
         })
+        policy_eligible_rows = [row for row in ranked_csv_rows if int(row.get("live_policy_risk_adjusted_match_count") or 0) > 0]
+        write_json(run_dir / "live_policy_overlay_report.json", live_policy_overlay_report)
+        write_csv(run_dir / "policy_eligible_candidates.csv", policy_eligible_rows)
         write_text(run_dir / "scan_log.txt", "\n".join(log_lines + [f"[{utc_now_iso()}] Completed successfully"]))
         write_json(run_dir / "artifact_manifest.json", artifact_manifest)
         integrity_report = _artifact_integrity_report(run_dir, ranked_csv_rows, ranked_json_rows, shortlist_views)

@@ -71,6 +71,8 @@ REQUIRED_SCAN_PACK_ARTIFACTS = {
     "config_used.json",
     "scan_log.txt",
     "outcome_tracking_summary.json",
+    "live_policy_overlay_report.json",
+    "policy_eligible_candidates.csv",
 }
 
 

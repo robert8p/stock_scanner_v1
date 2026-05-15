@@ -12,6 +12,8 @@
         <th>Overall</th>
         <th>Type</th>
         <th>Catalyst truth</th>
+        <th>Replay surface</th>
+        <th>Policy overlay</th>
         <th>Evidence</th>
         <th>Reasons</th>
         <th>Flags</th>
@@ -27,6 +29,12 @@
         <td>{{ '%.2f'|format(row.overall_score) }}</td>
         <td>{{ row.opportunity_type }}</td>
         <td><span class="badge {{ row.catalyst_support_level or 'weak' }}">{{ row.catalyst_truth_label }}</span></td>
+        <td>Rank {{ row.replay_surface_rank or 'n/a' }} · {{ row.replay_surface_score or 'n/a' }} · {{ row.replay_surface_label or 'unknown' }} · {{ row.market_regime or 'unknown' }}</td>
+        <td>
+          <strong>{{ row.live_policy_label or 'No validated elite policy' }}</strong><br>
+          {% if row.live_policy_badges %}<span class="subtle">{{ row.live_policy_badges|join(' · ') }}</span><br>{% endif %}
+          {% if row.live_policy_warning %}<span class="subtle">{{ row.live_policy_warning }}</span>{% endif %}
+        </td>
         <td>{{ row.data_quality_label }} ({{ row.evidence_completeness_pct }}%)</td>
         <td>{{ (row.reason_codes or [])|join(', ') }}</td>
         <td>{{ (row.risk_flags or [])|join(', ') }}</td>
@@ -44,6 +52,7 @@
       <h2>Latest Results</h2>
       {% if latest %}
       <p class="subtle">Run {{ latest.run_id }} · {{ latest.status }} · Universe {{ latest.universe_size }} · Enriched {{ latest.enrichment_size }} · Showing {{ latest.sort_label }}</p>
+      {% if latest.summary.live_policy_overlay %}<p class="subtle">Live policy overlay: {{ latest.summary.live_policy_overlay.eligible_count }} risk-adjusted eligible · {{ latest.summary.live_policy_overlay.raw_policy_match_count }} raw matches · {{ latest.summary.live_policy_overlay.risk_rejected_count }} risk rejected</p>{% endif %}
       {% endif %}
     </div>
     {% if latest %}
@@ -53,6 +62,8 @@
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/score_diagnostics.json">Score diagnostics</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/shortlist_views.json">Shortlist views</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/outcome_tracking_summary.json">Outcome tracking</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/live_policy_overlay_report.json">Policy overlay</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/policy_eligible_candidates.csv">Policy-eligible CSV</a>
     </div>
     {% endif %}
   </div>
