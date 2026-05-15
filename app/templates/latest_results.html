@@ -52,7 +52,7 @@
       <h2>Latest Results</h2>
       {% if latest %}
       <p class="subtle">Run {{ latest.run_id }} · {{ latest.status }} · Universe {{ latest.universe_size }} · Enriched {{ latest.enrichment_size }} · Showing {{ latest.sort_label }}</p>
-      {% if latest.summary.live_policy_overlay %}<p class="subtle">Live policy overlay: {{ latest.summary.live_policy_overlay.eligible_count }} risk-adjusted eligible · {{ latest.summary.live_policy_overlay.raw_policy_match_count }} raw matches · {{ latest.summary.live_policy_overlay.risk_rejected_count }} risk rejected</p>{% endif %}
+      {% if latest.summary.live_policy_overlay %}<p class="subtle">Live policy overlay: {{ latest.summary.live_policy_overlay.eligible_count }} eligible · {{ latest.summary.live_policy_overlay.policy_watchlist_candidate_count or 0 }} watchlist · {{ latest.summary.live_policy_overlay.raw_policy_match_count }} raw matches · {{ latest.summary.live_policy_overlay.risk_rejected_count }} rejected</p>{% endif %}
       {% endif %}
     </div>
     {% if latest %}
@@ -64,6 +64,7 @@
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/outcome_tracking_summary.json">Outcome tracking</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/live_policy_overlay_report.json">Policy overlay</a>
       <a class="link-btn" href="/download/run/{{ latest.run_id }}/policy_eligible_candidates.csv">Policy-eligible CSV</a>
+      <a class="link-btn" href="/download/run/{{ latest.run_id }}/policy_watchlist_candidates.csv">Policy-watchlist CSV</a>
     </div>
     {% endif %}
   </div>

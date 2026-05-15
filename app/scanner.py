@@ -929,6 +929,22 @@ def _policy_risk_flags(row: Dict[str, Any], policy_source: Dict[str, Any], setti
     return list(dict.fromkeys(risks))[:8]
 
 
+def _policy_reference_stop_rate(policy_rows_by_id: Dict[str, Any], pid: str) -> Optional[float]:
+    policy_row = policy_rows_by_id.get(pid, {}) or {}
+    stop_rate = policy_row.get("stop_rate")
+    try:
+        if stop_rate is None or pd.isna(stop_rate):
+            return None
+        return float(stop_rate)
+    except Exception:
+        return None
+
+
+def _policy_display_label(policy_rows_by_id: Dict[str, Any], definitions_by_id: Dict[str, Any], pid: str) -> str:
+    policy_row = policy_rows_by_id.get(pid, {}) or {}
+    return str(policy_row.get("label") or definitions_by_id.get(pid, {}).get("label") or pid)
+
+
 def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> Dict[str, Any]:
     policy_source = _load_latest_elite_policy_source()
     definitions_by_id = {policy["policy_id"]: policy for policy in ELITE_POLICY_DEFINITIONS}
@@ -949,9 +965,14 @@ def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> D
 
     pass_counts: Dict[str, int] = {pid: 0 for pid in passed_ids}
     watch_counts: Dict[str, int] = {pid: 0 for pid in watchlist_ids}
+    elevated_stop_counts: Dict[str, int] = {pid: 0 for pid in passed_ids}
+    eligible_policy_match_counts: Dict[str, int] = {pid: 0 for pid in passed_ids}
     high_composite_no_policy = 0
+    hard_risk_rejected_count = 0
     risk_rejected_count = 0
     eligible_count = 0
+    elevated_stop_watchlist_count = 0
+    policy_watchlist_candidate_count = 0
 
     for row in ranked_rows:
         raw_pass_ids = [pid for pid in passed_ids if _policy_live_match(row, definitions_by_id[pid])]
@@ -961,52 +982,67 @@ def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> D
         for pid in raw_watch_ids:
             watch_counts[pid] = watch_counts.get(pid, 0) + 1
 
-        risks = _policy_risk_flags(row, policy_source, settings)
-        elevated_stop_refs = []
-        ref_stop_rates = []
+        hard_risks = _policy_risk_flags(row, policy_source, settings)
+        stop_risk_flags: List[str] = []
+        ref_stop_rates: List[float] = []
+        risk_adjusted_ids: List[str] = []
+        elevated_stop_ids: List[str] = []
         for pid in raw_pass_ids:
-            policy_row = policy_rows_by_id.get(pid, {})
-            stop_rate = policy_row.get("stop_rate")
-            try:
-                if stop_rate is not None and not pd.isna(stop_rate):
-                    stop_rate_f = float(stop_rate)
-                    ref_stop_rates.append(stop_rate_f)
-                    if stop_rate_f > float(settings.live_policy_max_policy_stop_rate):
-                        elevated_stop_refs.append(f"{pid} historical stop rate {stop_rate_f:.1%}")
-            except Exception:
-                pass
-        risks.extend(elevated_stop_refs[:3])
-        risks = list(dict.fromkeys(risks))[:8]
-        risk_adjusted_ids = [] if risks else raw_pass_ids
-        if raw_pass_ids and risks:
+            stop_rate_f = _policy_reference_stop_rate(policy_rows_by_id, pid)
+            if stop_rate_f is not None:
+                ref_stop_rates.append(stop_rate_f)
+            if stop_rate_f is None or stop_rate_f <= float(settings.live_policy_max_policy_stop_rate):
+                risk_adjusted_ids.append(pid)
+                eligible_policy_match_counts[pid] = eligible_policy_match_counts.get(pid, 0) + 1
+            else:
+                elevated_stop_ids.append(pid)
+                elevated_stop_counts[pid] = elevated_stop_counts.get(pid, 0) + 1
+                stop_risk_flags.append(f"{pid} historical stop rate {stop_rate_f:.1%}")
+
+        if hard_risks:
+            # Hard live-data/risk issues block all policy eligibility. Elevated historical stop rates alone do not.
+            if raw_pass_ids:
+                hard_risk_rejected_count += 1
+            risk_adjusted_ids = []
+        if raw_pass_ids and not risk_adjusted_ids:
             risk_rejected_count += 1
         if risk_adjusted_ids:
             eligible_count += 1
+        elif raw_pass_ids and elevated_stop_ids:
+            elevated_stop_watchlist_count += 1
+        if (raw_pass_ids and not risk_adjusted_ids) or raw_watch_ids:
+            policy_watchlist_candidate_count += 1
 
-        badges = []
-        for pid in risk_adjusted_ids[:4]:
-            policy_row = policy_rows_by_id.get(pid, {})
-            badges.append(policy_row.get("label") or definitions_by_id[pid].get("label") or pid)
-        watch_badges = []
-        for pid in raw_watch_ids[:3]:
-            policy_row = policy_rows_by_id.get(pid, {})
-            watch_badges.append(policy_row.get("label") or definitions_by_id[pid].get("label") or pid)
+        watchlist_policy_ids = list(dict.fromkeys(raw_watch_ids + elevated_stop_ids))
+        risks = list(dict.fromkeys(hard_risks + stop_risk_flags))[:8]
+
+        eligible_badges = [_policy_display_label(policy_rows_by_id, definitions_by_id, pid) for pid in risk_adjusted_ids[:4]]
+        watch_badges = [_policy_display_label(policy_rows_by_id, definitions_by_id, pid) for pid in watchlist_policy_ids[:4]]
+        badges = eligible_badges if eligible_badges else watch_badges
 
         warning = ""
-        if raw_pass_ids and risks:
-            warning = "Matched a validated elite policy, but failed live risk-adjustment checks."
+        if risk_adjusted_ids and elevated_stop_ids:
+            warning = "Passes at least one validated elite policy after risk adjustment; other matched policies carry elevated historical stop risk."
+        elif risk_adjusted_ids:
+            warning = "Passes a validated elite policy after live risk adjustment."
+        elif raw_pass_ids and hard_risks:
+            warning = "Matched a validated elite policy, but hard live data/risk checks prevent eligibility."
+        elif raw_pass_ids:
+            warning = "Matched a validated elite policy, but only at elevated historical stop-risk levels; treat as watchlist, not eligible."
         elif not raw_pass_ids and (int(row.get("rank") or 999999) <= int(settings.live_policy_high_composite_rank_warning) or float(row.get("overall_score") or 0.0) >= 70.0):
             warning = "High live composite rank/score but no validated elite-policy match."
             high_composite_no_policy += 1
-        elif raw_watch_ids and not raw_pass_ids:
+        elif raw_watch_ids:
             warning = "Only watchlist-level policy resemblance; not a validated pass."
-        elif not raw_pass_ids and not raw_watch_ids:
+        else:
             warning = "No validated elite-policy match."
 
         if risk_adjusted_ids:
-            label = "Validated elite-policy pass"
+            label = "Policy eligible — risk-adjusted pass"
+        elif raw_pass_ids and hard_risks:
+            label = "Policy watchlist — live risk gated"
         elif raw_pass_ids:
-            label = "Policy match rejected by live risk gates"
+            label = "Policy watchlist — elevated stop risk"
         elif raw_watch_ids:
             label = "Policy watchlist resemblance"
         else:
@@ -1015,7 +1051,7 @@ def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> D
         row["live_policy_label"] = label
         row["live_policy_badges_json"] = json.dumps(badges)
         row["live_policy_ids_json"] = json.dumps(risk_adjusted_ids)
-        row["live_policy_watchlist_ids_json"] = json.dumps(raw_watch_ids)
+        row["live_policy_watchlist_ids_json"] = json.dumps(watchlist_policy_ids)
         row["live_policy_warning"] = warning
         row["live_policy_risk_flags_json"] = json.dumps(risks)
         row["live_policy_match_count"] = len(raw_pass_ids)
@@ -1030,13 +1066,19 @@ def _apply_live_policy_overlay(ranked_rows: List[Dict[str, Any]], settings) -> D
         "eligible_count": eligible_count,
         "raw_policy_match_count": sum(1 for row in ranked_rows if int(row.get("live_policy_match_count") or 0) > 0),
         "risk_rejected_count": risk_rejected_count,
+        "hard_risk_rejected_count": hard_risk_rejected_count,
+        "elevated_stop_watchlist_count": elevated_stop_watchlist_count,
+        "policy_watchlist_candidate_count": policy_watchlist_candidate_count,
         "watchlist_match_count": sum(1 for row in ranked_rows if row.get("live_policy_watchlist_ids_json") not in {None, "[]"}),
         "high_composite_no_policy_count": high_composite_no_policy,
         "passed_policy_match_counts": pass_counts,
+        "eligible_policy_match_counts": eligible_policy_match_counts,
+        "elevated_stop_policy_match_counts": elevated_stop_counts,
         "watchlist_policy_match_counts": watch_counts,
         "operator_guidance": [
             "Live policy badges show resemblance to historical elite replay policies; they are not calibrated probabilities.",
-            "Only candidates with risk-adjusted validated policy passes appear in policy_eligible_candidates.csv.",
+            "Policy eligible means at least one validated historical policy passes the live risk-adjusted gate.",
+            "Policy watchlist means the candidate resembles a validated/watchlist policy but is blocked by elevated stop risk, data quality, or watchlist-only status.",
             "High composite candidates without policy badges should still be reviewed manually but should not be treated as replay-validated.",
         ],
     }
@@ -1444,6 +1486,7 @@ def _run_scan_thread(run_id: str) -> None:
                 "outcome_tracking_summary.json",
                 "live_policy_overlay_report.json",
                 "policy_eligible_candidates.csv",
+                "policy_watchlist_candidates.csv",
             ],
             "artifacts_present_before_zip": sorted([p.name for p in run_dir.iterdir() if p.is_file()]),
         }
@@ -1467,8 +1510,17 @@ def _run_scan_thread(run_id: str) -> None:
             },
         })
         policy_eligible_rows = [row for row in ranked_csv_rows if int(row.get("live_policy_risk_adjusted_match_count") or 0) > 0]
+        policy_watchlist_rows = [
+            row for row in ranked_csv_rows
+            if int(row.get("live_policy_risk_adjusted_match_count") or 0) == 0
+            and (
+                int(row.get("live_policy_match_count") or 0) > 0
+                or bool(str(row.get("live_policy_watchlist_ids") or "").strip())
+            )
+        ]
         write_json(run_dir / "live_policy_overlay_report.json", live_policy_overlay_report)
         write_csv(run_dir / "policy_eligible_candidates.csv", policy_eligible_rows)
+        write_csv(run_dir / "policy_watchlist_candidates.csv", policy_watchlist_rows)
         write_text(run_dir / "scan_log.txt", "\n".join(log_lines + [f"[{utc_now_iso()}] Completed successfully"]))
         write_json(run_dir / "artifact_manifest.json", artifact_manifest)
         integrity_report = _artifact_integrity_report(run_dir, ranked_csv_rows, ranked_json_rows, shortlist_views)

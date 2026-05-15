@@ -73,6 +73,7 @@ REQUIRED_SCAN_PACK_ARTIFACTS = {
     "outcome_tracking_summary.json",
     "live_policy_overlay_report.json",
     "policy_eligible_candidates.csv",
+    "policy_watchlist_candidates.csv",
 }
 
 

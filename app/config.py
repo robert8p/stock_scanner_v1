@@ -19,10 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     app_name: str = os.getenv("APP_NAME", "news-fundamentals-technicals-stock-scanner")
     app_env: str = os.getenv("APP_ENV", "production")
-    app_version: str = os.getenv("APP_VERSION", "v2.4.0")
-    build_id: str = os.getenv("BUILD_ID", "v2.4.0-live-elite-policy-overlay")
+    app_version: str = os.getenv("APP_VERSION", "v2.4.1")
+    build_id: str = os.getenv("BUILD_ID", "v2.4.1-live-policy-watchlist-hardening")
     build_timestamp_utc: str = os.getenv("BUILD_TIMESTAMP_UTC", datetime.now(timezone.utc).isoformat())
-    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-15-v2.4.0")
+    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-15-v2.4.1")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 
