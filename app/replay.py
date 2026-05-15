@@ -54,6 +54,8 @@ REQUIRED_REPLAY_ARTIFACTS = {
     "replay_artifact_manifest.json",
     "replay_parity_assessment.json",
     "surface_feature_report.json",
+    "elite_policy_leaderboard.csv",
+    "elite_policy_report.json",
 }
 
 
@@ -118,6 +120,11 @@ def _build_replay_record(replay_id: str, settings, status: str, started_at: str,
             "replay_min_top_quintile_lift": settings.replay_min_top_quintile_lift,
             "replay_max_monotonicity_violations": settings.replay_max_monotonicity_violations,
             "replay_monotonicity_tolerance": settings.replay_monotonicity_tolerance,
+            "replay_policy_min_observations": settings.replay_policy_min_observations,
+            "replay_policy_min_snapshots": settings.replay_policy_min_snapshots,
+            "replay_policy_min_lift_vs_all": settings.replay_policy_min_lift_vs_all,
+            "replay_policy_min_avg_end_return_pct": settings.replay_policy_min_avg_end_return_pct,
+            "replay_policy_max_stop_rate": settings.replay_policy_max_stop_rate,
         }, default=str),
         "warnings_json": json.dumps(extra.get("warnings", []), default=str),
         "artifacts_dir": extra.get("artifacts_dir", ""),
@@ -897,6 +904,272 @@ def _evaluate_forward_outcome(frame: pd.DataFrame, snapshot_date: pd.Timestamp, 
 
 
 
+
+ELITE_POLICY_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "policy_id": "top_3_per_snapshot",
+        "label": "Top 3 per snapshot",
+        "description": "Only the three highest-scoring replay candidates each snapshot.",
+        "top_n": 3,
+    },
+    {
+        "policy_id": "top_5_per_snapshot",
+        "label": "Top 5 per snapshot",
+        "description": "Only the five highest-scoring replay candidates each snapshot.",
+        "top_n": 5,
+    },
+    {
+        "policy_id": "top_10_per_snapshot",
+        "label": "Top 10 per snapshot",
+        "description": "Only the ten highest-scoring replay candidates each snapshot.",
+        "top_n": 10,
+    },
+    {
+        "policy_id": "score_ge_85",
+        "label": "Score >= 85",
+        "description": "Any replay candidate with score at or above 85.",
+        "min_score": 85,
+    },
+    {
+        "policy_id": "score_ge_90",
+        "label": "Score >= 90",
+        "description": "Any replay candidate with score at or above 90.",
+        "min_score": 90,
+    },
+    {
+        "policy_id": "score_ge_80_risk_on",
+        "label": "Score >= 80 in risk-on regime",
+        "description": "High score candidate when benchmark context is risk-on.",
+        "min_score": 80,
+        "market_regime": "risk_on",
+    },
+    {
+        "policy_id": "score_ge_80_risk_off",
+        "label": "Score >= 80 in risk-off regime",
+        "description": "High score candidate when benchmark context is risk-off.",
+        "min_score": 80,
+        "market_regime": "risk_off",
+    },
+    {
+        "policy_id": "score_ge_80_continuation",
+        "label": "Score >= 80 + continuation surface",
+        "description": "High score candidate classified as a continuation setup.",
+        "min_score": 80,
+        "surface_label": "continuation",
+    },
+    {
+        "policy_id": "score_ge_85_continuation",
+        "label": "Score >= 85 + continuation surface",
+        "description": "Elite score candidate classified as a continuation setup.",
+        "min_score": 85,
+        "surface_label": "continuation",
+    },
+    {
+        "policy_id": "score_ge_90_continuation",
+        "label": "Score >= 90 + continuation surface",
+        "description": "Very elite score candidate classified as a continuation setup.",
+        "min_score": 90,
+        "surface_label": "continuation",
+    },
+    {
+        "policy_id": "score_ge_80_rebound",
+        "label": "Score >= 80 + rebound surface",
+        "description": "High score candidate classified as a rebound setup.",
+        "min_score": 80,
+        "surface_label": "rebound",
+    },
+    {
+        "policy_id": "score_ge_85_rebound",
+        "label": "Score >= 85 + rebound surface",
+        "description": "Elite score candidate classified as a rebound setup.",
+        "min_score": 85,
+        "surface_label": "rebound",
+    },
+    {
+        "policy_id": "score_ge_80_risk_on_continuation",
+        "label": "Score >= 80 + risk-on continuation",
+        "description": "High score continuation candidate in a supportive benchmark regime.",
+        "min_score": 80,
+        "market_regime": "risk_on",
+        "surface_label": "continuation",
+    },
+    {
+        "policy_id": "score_ge_80_risk_off_rebound",
+        "label": "Score >= 80 + risk-off rebound",
+        "description": "High score rebound candidate in a risk-off benchmark regime.",
+        "min_score": 80,
+        "market_regime": "risk_off",
+        "surface_label": "rebound",
+    },
+]
+
+
+def _policy_mask(observations: pd.DataFrame, policy: Dict[str, Any]) -> pd.Series:
+    mask = pd.Series(True, index=observations.index)
+    if "top_n" in policy:
+        mask &= observations.get("score_rank", pd.Series(index=observations.index, dtype=float)) <= int(policy["top_n"])
+    if "min_score" in policy:
+        mask &= observations.get("score", pd.Series(index=observations.index, dtype=float)) >= float(policy["min_score"])
+    if policy.get("market_regime"):
+        mask &= observations.get("market_regime", pd.Series(index=observations.index, dtype=str)).astype(str) == str(policy["market_regime"])
+    if policy.get("surface_label"):
+        mask &= observations.get("surface_label", pd.Series(index=observations.index, dtype=str)).astype(str) == str(policy["surface_label"])
+    return mask.fillna(False)
+
+
+def _policy_pass_status(row: Dict[str, Any], settings) -> Tuple[str, List[str]]:
+    reasons: List[str] = []
+    if row["observations"] < settings.replay_policy_min_observations:
+        reasons.append(f"Only {row['observations']} observations; minimum is {settings.replay_policy_min_observations}.")
+    if row["snapshot_count"] < settings.replay_policy_min_snapshots:
+        reasons.append(f"Only {row['snapshot_count']} snapshots represented; minimum is {settings.replay_policy_min_snapshots}.")
+    if row["lift_vs_all"] is None or row["lift_vs_all"] < settings.replay_policy_min_lift_vs_all:
+        reasons.append(f"Lift vs all {row['lift_vs_all']} is below {settings.replay_policy_min_lift_vs_all}.")
+    if row["avg_end_return_pct"] is None or row["avg_end_return_pct"] < settings.replay_policy_min_avg_end_return_pct:
+        reasons.append(f"Average end return {row['avg_end_return_pct']} is below {settings.replay_policy_min_avg_end_return_pct}.")
+    if row["stop_rate"] is not None and row["stop_rate"] > settings.replay_policy_max_stop_rate:
+        reasons.append(f"Stop rate {row['stop_rate']} is above {settings.replay_policy_max_stop_rate}.")
+    if reasons:
+        if row["observations"] >= settings.replay_policy_min_observations and row["snapshot_count"] >= settings.replay_policy_min_snapshots and (row["lift_vs_all"] or 0) > 0 and (row["avg_end_return_pct"] or 0) > 0:
+            return "watchlist", reasons
+        return "fail", reasons
+    return "pass", ["Policy passes the V2.3 elite-policy gates. This is a historical policy gate, not a calibrated probability."]
+
+
+def _build_elite_policy_outputs(observations: pd.DataFrame, settings) -> Dict[str, Any]:
+    if observations.empty:
+        empty_report = {
+            "status": "failed",
+            "reason": "No observations available for elite-policy validation.",
+            "policy_gates": {},
+            "recommended_policy_count": 0,
+            "recommended_policies": [],
+            "best_policy": None,
+            "note": "Policy validation is not probability calibration.",
+        }
+        return {"leaderboard": [], "report": empty_report}
+
+    df = observations.copy()
+    snapshot_count = int(df["snapshot_date"].nunique()) if "snapshot_date" in df.columns else 0
+    all_hit = float(df["target_hit"].mean()) if len(df) else 0.0
+    all_end = float(df["end_return_pct"].mean()) if "end_return_pct" in df.columns and len(df) else 0.0
+    shortlist_df = df[df.get("shortlist_flag", 0) == 1]
+    shortlist_hit = float(shortlist_df["target_hit"].mean()) if len(shortlist_df) else all_hit
+
+    leaderboard: List[Dict[str, Any]] = []
+    for definition in ELITE_POLICY_DEFINITIONS:
+        selected = df[_policy_mask(df, definition)].copy()
+        if selected.empty:
+            row = {
+                "policy_id": definition["policy_id"],
+                "label": definition["label"],
+                "description": definition["description"],
+                "observations": 0,
+                "snapshot_count": 0,
+                "snapshot_coverage_pct": 0.0,
+                "avg_candidates_per_snapshot": 0.0,
+                "hit_rate": None,
+                "lift_vs_all": None,
+                "lift_vs_shortlist": None,
+                "avg_end_return_pct": None,
+                "avg_max_return_pct": None,
+                "avg_min_return_pct": None,
+                "stop_rate": None,
+                "expired_rate": None,
+                "median_score": None,
+                "min_score": definition.get("min_score"),
+                "max_score": None,
+                "dominant_regime": definition.get("market_regime") or "mixed",
+                "dominant_surface": definition.get("surface_label") or "mixed",
+                "policy_score": -999.0,
+                "validation_status": "fail",
+                "validation_reason": "No observations matched this policy.",
+            }
+            leaderboard.append(row)
+            continue
+
+        obs = int(len(selected))
+        selected_snapshots = int(selected["snapshot_date"].nunique()) if "snapshot_date" in selected.columns else 0
+        hit_rate = float(selected["target_hit"].mean())
+        stop_rate = float(selected["stop_hit"].mean()) if "stop_hit" in selected.columns else None
+        expired_rate = float(selected["expired_flag"].mean()) if "expired_flag" in selected.columns else None
+        lift_vs_all = hit_rate - all_hit
+        lift_vs_shortlist = hit_rate - shortlist_hit
+        regime_mode = selected["market_regime"].mode().iloc[0] if "market_regime" in selected.columns and not selected["market_regime"].mode().empty else None
+        surface_mode = selected["surface_label"].mode().iloc[0] if "surface_label" in selected.columns and not selected["surface_label"].mode().empty else None
+        avg_end = float(selected["end_return_pct"].mean()) if "end_return_pct" in selected.columns else None
+        avg_max = float(selected["max_return_pct"].mean()) if "max_return_pct" in selected.columns else None
+        avg_min = float(selected["min_return_pct"].mean()) if "min_return_pct" in selected.columns else None
+        # A compact ranking score for operator ordering. It favors lift, returns, and enough sample size, while penalizing high stop rates.
+        sample_factor = min(1.0, obs / max(float(settings.replay_policy_min_observations), 1.0))
+        policy_score = (lift_vs_all * 100.0) + ((avg_end or 0.0) * 50.0) + (hit_rate * 10.0) + (sample_factor * 2.0) - ((stop_rate or 0.0) * 3.0)
+        row = {
+            "policy_id": definition["policy_id"],
+            "label": definition["label"],
+            "description": definition["description"],
+            "observations": obs,
+            "snapshot_count": selected_snapshots,
+            "snapshot_coverage_pct": _safe_round((selected_snapshots / snapshot_count) if snapshot_count else 0.0),
+            "avg_candidates_per_snapshot": _safe_round(obs / selected_snapshots, 2) if selected_snapshots else 0.0,
+            "hit_rate": _safe_round(hit_rate),
+            "lift_vs_all": _safe_round(lift_vs_all),
+            "lift_vs_shortlist": _safe_round(lift_vs_shortlist),
+            "avg_end_return_pct": _safe_round(avg_end),
+            "avg_max_return_pct": _safe_round(avg_max),
+            "avg_min_return_pct": _safe_round(avg_min),
+            "stop_rate": _safe_round(stop_rate),
+            "expired_rate": _safe_round(expired_rate),
+            "median_score": _safe_round(selected["score"].median(), 2),
+            "min_score": _safe_round(selected["score"].min(), 2),
+            "max_score": _safe_round(selected["score"].max(), 2),
+            "dominant_regime": regime_mode or definition.get("market_regime") or "mixed",
+            "dominant_surface": surface_mode or definition.get("surface_label") or "mixed",
+            "policy_score": _safe_round(policy_score, 3),
+        }
+        status, reasons = _policy_pass_status(row, settings)
+        row["validation_status"] = status
+        row["validation_reason"] = " | ".join(reasons[:3])
+        leaderboard.append(row)
+
+    status_order = {"pass": 3, "watchlist": 2, "fail": 1}
+    leaderboard = sorted(leaderboard, key=lambda r: (status_order.get(str(r.get("validation_status")), 0), r.get("policy_score") if r.get("policy_score") is not None else -999), reverse=True)
+    for idx, row in enumerate(leaderboard, start=1):
+        row["policy_rank"] = idx
+
+    passed = [row for row in leaderboard if row.get("validation_status") == "pass"]
+    watchlist = [row for row in leaderboard if row.get("validation_status") == "watchlist"]
+    best = passed[0] if passed else (watchlist[0] if watchlist else (leaderboard[0] if leaderboard else None))
+    report = {
+        "status": "pass" if passed else "watchlist" if watchlist else "fail",
+        "policy_gates": {
+            "min_observations": settings.replay_policy_min_observations,
+            "min_snapshots": settings.replay_policy_min_snapshots,
+            "min_lift_vs_all": settings.replay_policy_min_lift_vs_all,
+            "min_avg_end_return_pct": settings.replay_policy_min_avg_end_return_pct,
+            "max_stop_rate": settings.replay_policy_max_stop_rate,
+        },
+        "baseline": {
+            "all_observations": int(len(df)),
+            "all_hit_rate": _safe_round(all_hit),
+            "all_avg_end_return_pct": _safe_round(all_end),
+            "shortlist_observations": int(len(shortlist_df)),
+            "shortlist_hit_rate": _safe_round(shortlist_hit),
+            "snapshot_count": snapshot_count,
+        },
+        "recommended_policy_count": len(passed),
+        "watchlist_policy_count": len(watchlist),
+        "recommended_policies": [row["policy_id"] for row in passed[:8]],
+        "watchlist_policies": [row["policy_id"] for row in watchlist[:8]],
+        "best_policy": best,
+        "operator_guidance": [
+            "Use the leaderboard as a historical gate for elite candidates, not as a probability table.",
+            "Prefer policies marked pass; treat watchlist policies as research candidates only.",
+            "Do not treat the whole top 20 as equivalent if only top-3/top-5 or score-threshold policies pass.",
+        ],
+        "note": "V2.3 validates elite policy gates over timing-only replay. It does not authorize calibrated live probabilities for the full composite score.",
+    }
+    return {"leaderboard": leaderboard, "report": report}
+
 def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode: str) -> Dict[str, Any]:
     if observations.empty:
         empty = []
@@ -919,6 +1192,8 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
             },
             "discrimination_report": empty_diag,
             "surface_feature_report": {"status": "empty", "surface_label_distribution": {}, "surface_label_metrics": [], "surface_by_regime": [], "score_component_summary": {}},
+            "elite_policy_leaderboard": [],
+            "elite_policy_report": {"status": "failed", "reason": "No replay observations were produced.", "recommended_policy_count": 0, "best_policy": None},
             "replay_summary_extra": {
                 "observation_count": 0,
                 "eligible_for_probability_display": False,
@@ -984,6 +1259,9 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
     regime_slice_metrics = _regime_slice_rows(observations, settings.replay_min_regime_slice_observations)
     monotonicity = _monotonicity_diagnostics(score_band_metrics, settings.replay_monotonicity_tolerance)
     surface_feature_report = _build_surface_feature_report(observations)
+    elite_policy_outputs = _build_elite_policy_outputs(observations, settings)
+    elite_policy_leaderboard = elite_policy_outputs["leaderboard"]
+    elite_policy_report = elite_policy_outputs["report"]
 
     enough_obs = len(observations) >= settings.calibration_min_observations
     enough_bands = all(row["observations"] >= settings.calibration_min_band_size for row in score_band_metrics if row["observations"] > 0)
@@ -1058,6 +1336,8 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
         "monotonicity_diagnostics": monotonicity,
         "discrimination_report": discrimination_report,
         "surface_feature_report": surface_feature_report,
+        "elite_policy_leaderboard": elite_policy_leaderboard,
+        "elite_policy_report": elite_policy_report,
         "replay_summary_extra": {
             "observation_count": int(len(observations)),
             "brier_score": _safe_round(brier),
@@ -1075,6 +1355,11 @@ def _build_calibration_outputs(observations: pd.DataFrame, settings, replay_mode
             "calibration_min_band_size": settings.calibration_min_band_size,
             "surface_label_distribution": surface_feature_report.get("surface_label_distribution", {}),
             "avg_surface_score": surface_feature_report.get("score_component_summary", {}).get("avg_surface_score"),
+            "elite_policy_validation_status": elite_policy_report.get("status"),
+            "elite_policy_recommended_count": elite_policy_report.get("recommended_policy_count"),
+            "elite_policy_watchlist_count": elite_policy_report.get("watchlist_policy_count"),
+            "best_elite_policy_id": (elite_policy_report.get("best_policy") or {}).get("policy_id"),
+            "best_elite_policy_label": (elite_policy_report.get("best_policy") or {}).get("label"),
         },
     }
 
@@ -1234,10 +1519,12 @@ def _run_replay_thread(replay_id: str) -> None:
         monotonicity_diagnostics = calibration_outputs["monotonicity_diagnostics"]
         discrimination_report = calibration_outputs["discrimination_report"]
         surface_feature_report = calibration_outputs["surface_feature_report"]
+        elite_policy_leaderboard = calibration_outputs["elite_policy_leaderboard"]
+        elite_policy_report = calibration_outputs["elite_policy_report"]
         replay_extra = calibration_outputs["replay_summary_extra"]
         parity_assessment = {
             "replay_mode": replay_mode,
-            "replay_surface": "feature_surface_hardened_v2_2",
+            "replay_surface": "elite_policy_validation_v2_3",
             "parity_status": replay_extra.get("parity_status"),
             "eligible_for_probability_display": replay_extra.get("eligible_for_probability_display"),
             "eligibility_reason": replay_extra.get("eligibility_reason"),
@@ -1245,7 +1532,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "discrimination_validation_reason": replay_extra.get("discrimination_validation_reason"),
             "limitations": [
                 "Replay still uses timing-only historical inputs because point-in-time fundamentals and news are not available from the current provider stack.",
-                "V2.2 hardens the timing replay surface with continuation/rebound feature blending and stronger context diagnostics, but this is still not the full live composite score.",
+                "V2.3 validates elite policy gates such as top-3/top-5 and score-threshold slices, but this is still not the full live composite score.",
                 "Do not label live scanner scores as calibrated probabilities until full-parity replay exists and calibration thresholds are met.",
             ],
         }
@@ -1255,7 +1542,7 @@ def _run_replay_thread(replay_id: str) -> None:
             "ended_at": utc_now_iso(),
             "provider": provider.provider_name,
             "replay_mode": replay_mode,
-            "replay_surface": "feature_surface_hardened_v2_2",
+            "replay_surface": "elite_policy_validation_v2_3",
             "universe_size_loaded": len(universe_rows),
             "snapshot_count_requested": min(len(spy_history.index[settings.replay_warmup_days : len(spy_history) - settings.outcome_horizon_days][:: max(step,1)]), settings.replay_max_snapshots),
             "snapshot_count_completed": int(obs_df["snapshot_date"].nunique()) if not obs_df.empty else 0,
@@ -1274,14 +1561,14 @@ def _run_replay_thread(replay_id: str) -> None:
                 "build_timestamp_utc": settings.build_timestamp_utc,
                 "artifact_schema_version": settings.artifact_schema_version,
             },
-            "note": "This V2.2 build hardens replay feature-surface discrimination with continuation/rebound blending, regime slicing, and monotonicity gates. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
+            "note": "This V2.3 build validates elite policy gates over the replay surface. It produces a policy leaderboard, not calibrated live probabilities. Full live probability display remains disabled until replay parity covers point-in-time fundamentals and catalysts.",
         }
 
         manifest = {
             "replay_id": replay_id,
             "required_artifacts": sorted(REQUIRED_REPLAY_ARTIFACTS),
             "replay_mode": replay_mode,
-            "replay_surface": "feature_surface_hardened_v2_2",
+            "replay_surface": "elite_policy_validation_v2_3",
             "build": replay_summary["build"],
         }
         write_json(run_dir / "replay_summary.json", replay_summary)
@@ -1294,6 +1581,8 @@ def _run_replay_thread(replay_id: str) -> None:
         write_json(run_dir / "discrimination_report.json", discrimination_report)
         write_json(run_dir / "monotonicity_diagnostics.json", monotonicity_diagnostics)
         write_json(run_dir / "surface_feature_report.json", surface_feature_report)
+        write_csv(run_dir / "elite_policy_leaderboard.csv", elite_policy_leaderboard)
+        write_json(run_dir / "elite_policy_report.json", elite_policy_report)
         write_text(run_dir / "validation_log.txt", "\n".join(log_lines + [f"[{utc_now_iso()}] Replay completed successfully"]))
         write_json(run_dir / "config_used.json", {
             "replay_ticker_limit": settings.replay_ticker_limit,
@@ -1311,6 +1600,11 @@ def _run_replay_thread(replay_id: str) -> None:
             "replay_min_top_quintile_lift": settings.replay_min_top_quintile_lift,
             "replay_max_monotonicity_violations": settings.replay_max_monotonicity_violations,
             "replay_monotonicity_tolerance": settings.replay_monotonicity_tolerance,
+            "replay_policy_min_observations": settings.replay_policy_min_observations,
+            "replay_policy_min_snapshots": settings.replay_policy_min_snapshots,
+            "replay_policy_min_lift_vs_all": settings.replay_policy_min_lift_vs_all,
+            "replay_policy_min_avg_end_return_pct": settings.replay_policy_min_avg_end_return_pct,
+            "replay_policy_max_stop_rate": settings.replay_policy_max_stop_rate,
         })
         write_json(run_dir / "replay_parity_assessment.json", parity_assessment)
         write_json(run_dir / "replay_artifact_manifest.json", manifest)
@@ -1357,12 +1651,19 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
         "discrimination_validation_reason": validation.get("discrimination_validation_reason", "No replay discrimination decision available yet."),
         "eligible_for_probability_display": validation.get("eligible_for_probability_display", False),
         "eligibility_reason": validation.get("eligibility_reason", "Probability display remains disabled until replay evidence is available."),
+        "elite_policy_validation_status": validation.get("elite_policy_validation_status", "unknown"),
+        "elite_policy_recommended_count": validation.get("elite_policy_recommended_count", 0),
+        "elite_policy_watchlist_count": validation.get("elite_policy_watchlist_count", 0),
+        "best_elite_policy_id": validation.get("best_elite_policy_id"),
+        "best_elite_policy_label": validation.get("best_elite_policy_label"),
     }
     calibration_table: List[Dict[str, Any]] = []
     score_band_metrics: List[Dict[str, Any]] = []
     top_vs_rest: List[Dict[str, Any]] = []
     quantile_lift_table: List[Dict[str, Any]] = []
     regime_slice_metrics: List[Dict[str, Any]] = []
+    elite_policy_leaderboard: List[Dict[str, Any]] = []
+    elite_policy_report: Dict[str, Any] = {"status": "unknown", "recommended_policy_count": 0, "best_policy": None, "policy_gates": {}}
     discrimination_report: Dict[str, Any] = {"gates": {}, "summary": {}}
     monotonicity_diagnostics: Dict[str, Any] = {"score_band_hit_rates": [], "violations": []}
     if artifacts_dir.exists():
@@ -1372,6 +1673,7 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
             "top_vs_rest_comparison.csv": "top_vs_rest",
             "quantile_lift_table.csv": "quantile_lift_table",
             "regime_slice_metrics.csv": "regime_slice_metrics",
+            "elite_policy_leaderboard.csv": "elite_policy_leaderboard",
         }
         for name, attr in csv_targets.items():
             path = artifacts_dir / name
@@ -1386,6 +1688,8 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
                         top_vs_rest = rows
                     elif attr == "quantile_lift_table":
                         quantile_lift_table = rows
+                    elif attr == "elite_policy_leaderboard":
+                        elite_policy_leaderboard = rows
                     else:
                         regime_slice_metrics = rows
                 except Exception:
@@ -1393,6 +1697,7 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
         json_targets = {
             "discrimination_report.json": "discrimination_report",
             "monotonicity_diagnostics.json": "monotonicity_diagnostics",
+            "elite_policy_report.json": "elite_policy_report",
         }
         for name, attr in json_targets.items():
             path = artifacts_dir / name
@@ -1401,6 +1706,8 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
                     payload = json.loads(path.read_text())
                     if attr == "discrimination_report":
                         discrimination_report = payload if isinstance(payload, dict) else {"gates": {}, "summary": {}}
+                    elif attr == "elite_policy_report":
+                        elite_policy_report = payload if isinstance(payload, dict) else {"status": "unknown", "recommended_policy_count": 0, "best_policy": None, "policy_gates": {}}
                     else:
                         monotonicity_diagnostics = payload if isinstance(payload, dict) else {"score_band_hit_rates": [], "violations": []}
                 except Exception:
@@ -1409,6 +1716,10 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
     discrimination_report.setdefault("summary", {})
     monotonicity_diagnostics.setdefault("score_band_hit_rates", [])
     monotonicity_diagnostics.setdefault("violations", [])
+    elite_policy_report.setdefault("status", "unknown")
+    elite_policy_report.setdefault("recommended_policy_count", 0)
+    elite_policy_report.setdefault("watchlist_policy_count", 0)
+    elite_policy_report.setdefault("policy_gates", {})
     required_names = set(REQUIRED_REPLAY_ARTIFACTS)
     existing_names = {p.name for p in artifacts_dir.iterdir() if p.is_file()} if artifacts_dir.exists() else set()
     missing_required_artifacts = sorted(required_names - existing_names)
@@ -1418,6 +1729,8 @@ def latest_replay_payload() -> Optional[Dict[str, Any]]:
     run["top_vs_rest"] = top_vs_rest
     run["quantile_lift_table"] = quantile_lift_table
     run["regime_slice_metrics"] = regime_slice_metrics
+    run["elite_policy_leaderboard"] = elite_policy_leaderboard
+    run["elite_policy_report"] = elite_policy_report
     run["discrimination_report"] = discrimination_report
     run["monotonicity_diagnostics"] = monotonicity_diagnostics
     run["can_download_validation_pack"] = bool(run.get("status") == "completed" and not missing_required_artifacts and run.get("artifact_zip_path"))

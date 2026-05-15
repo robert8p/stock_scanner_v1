@@ -3,7 +3,7 @@
 <section class="hero-grid">
   <div class="card">
     <h2>Replay / Calibration</h2>
-    <p>Run a historical replay over daily snapshots to test whether higher-ranked names outperform lower-ranked names. This build still uses an honest timing-only replay boundary, but V2.1 hardens discrimination with context-adjusted timing replay, regime slicing, and explicit monotonicity gates.</p>
+    <p>Run a historical replay over daily snapshots to test whether elite policies — top 3, top 5, score thresholds, regime gates and surface gates — outperform the full replay universe. V2.3 produces a policy leaderboard, not calibrated probabilities.</p>
     <button id="run-replay-btn" class="primary-btn">Run Replay</button>
     <p class="subtle">Replay mode: {{ settings.replay_default_mode }} · Universe cap: {{ settings.replay_ticker_limit }} · Max snapshots: {{ settings.replay_max_snapshots }} · Horizon: {{ settings.outcome_horizon_days }} trading days</p>
     <div id="replay-feedback" class="status-box">Ready</div>
@@ -13,10 +13,10 @@
   <div class="card emphasis">
     <h2>Calibration truth boundary</h2>
     <ul>
-      <li>This V2.1 build strengthens replay validation.</li>
+      <li>This V2.3 build validates elite policy gates.</li>
       <li>It still does not authorize live probability labels for the full composite score.</li>
+      <li>Use policy pass/watchlist/fail status to decide which slices deserve manual review.</li>
       <li>Probability display stays disabled until replay parity includes point-in-time structural and catalyst inputs.</li>
-      <li>Use the discrimination report to judge whether ranking quality improves with score.</li>
     </ul>
   </div>
 </section>
@@ -37,6 +37,8 @@
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/quantile_lift_table.csv">Quantiles</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/regime_slice_metrics.csv">Regimes</a>
       <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/replay_parity_assessment.json">Parity</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/elite_policy_leaderboard.csv">Elite policies</a>
+      <a class="link-btn" href="/download/replay/{{ latest_replay.replay_id }}/elite_policy_report.json">Policy report</a>
       {% elif latest_replay.has_validation_log %}
       <a class="primary-btn" href="/download/replay/{{ latest_replay.replay_id }}/validation_log.txt">Download validation log</a>
       {% endif %}
@@ -65,6 +67,9 @@
     <div class="metric-card"><span>Spearman</span><strong>{{ latest_replay.summary.validation.score_outcome_spearman }}</strong></div>
     <div class="metric-card"><span>Top decile lift</span><strong>{{ latest_replay.summary.validation.top_decile_lift }}</strong></div>
     <div class="metric-card"><span>Monotonicity violations</span><strong>{{ latest_replay.summary.validation.score_band_monotonicity_violations }}</strong></div>
+    <div class="metric-card"><span>Elite policy status</span><strong>{{ latest_replay.summary.validation.elite_policy_validation_status }}</strong></div>
+    <div class="metric-card"><span>Recommended policies</span><strong>{{ latest_replay.summary.validation.elite_policy_recommended_count }}</strong></div>
+    <div class="metric-card"><span>Best policy</span><strong>{{ latest_replay.summary.validation.best_elite_policy_label or 'n/a' }}</strong></div>
   </div>
   <div class="alert-box {% if latest_replay.summary.validation.discrimination_validation_status == 'pass' %}good{% else %}bad{% endif %}">
     <strong>Discrimination decision:</strong> {{ latest_replay.summary.validation.discrimination_validation_reason }}
@@ -73,6 +78,47 @@
     <strong>Probability display:</strong> {{ latest_replay.summary.validation.eligibility_reason }}
   </div>
   {% endif %}
+</section>
+
+
+<section class="card">
+  <div class="section-head">
+    <div>
+      <h2>Elite policy leaderboard</h2>
+      <p class="subtle">Historical policy gates for small, elite slices. These are not calibrated probabilities.</p>
+    </div>
+    {% if latest_replay.elite_policy_report %}
+    <div class="status-pill">Status: {{ latest_replay.elite_policy_report.status }}</div>
+    {% endif %}
+  </div>
+  {% if latest_replay.elite_policy_report.best_policy %}
+  <div class="alert-box {% if latest_replay.elite_policy_report.status == 'pass' %}good{% elif latest_replay.elite_policy_report.status == 'watchlist' %}{% else %}bad{% endif %}">
+    <strong>Best policy:</strong> {{ latest_replay.elite_policy_report.best_policy.label }} ·
+    hit rate {{ latest_replay.elite_policy_report.best_policy.hit_rate }} ·
+    lift vs all {{ latest_replay.elite_policy_report.best_policy.lift_vs_all }} ·
+    avg end return {{ latest_replay.elite_policy_report.best_policy.avg_end_return_pct }}
+  </div>
+  {% endif %}
+  <div class="table-wrap">
+    <table class="small-table">
+      <thead><tr><th>Rank</th><th>Policy</th><th>Status</th><th>Obs</th><th>Snapshots</th><th>Hit rate</th><th>Lift vs all</th><th>Avg end return</th><th>Stop rate</th></tr></thead>
+      <tbody>
+        {% for row in (latest_replay.elite_policy_leaderboard or [])[:12] %}
+        <tr>
+          <td>{{ row.policy_rank }}</td>
+          <td><strong>{{ row.label }}</strong><br><span class="subtle">{{ row.description }}</span></td>
+          <td>{{ row.validation_status }}</td>
+          <td>{{ row.observations }}</td>
+          <td>{{ row.snapshot_count }}</td>
+          <td>{{ row.hit_rate }}</td>
+          <td>{{ row.lift_vs_all }}</td>
+          <td>{{ row.avg_end_return_pct }}</td>
+          <td>{{ row.stop_rate }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="hero-grid">

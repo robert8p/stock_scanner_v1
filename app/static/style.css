@@ -242,3 +242,12 @@ ul { padding-left: 1.1rem; }
 .integrity-pass { color: #7ff0b6; }
 .integrity-fail { color: #ffb3b3; }
 .small-table td, .small-table th { font-size: 0.86rem; padding: 0.55rem 0.6rem; }
+.status-pill {
+  display: inline-block;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #1f2a44;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
