@@ -19,10 +19,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     app_name: str = os.getenv("APP_NAME", "news-fundamentals-technicals-stock-scanner")
     app_env: str = os.getenv("APP_ENV", "production")
-    app_version: str = os.getenv("APP_VERSION", "v2.4.1")
-    build_id: str = os.getenv("BUILD_ID", "v2.4.1-live-policy-watchlist-hardening")
+    app_version: str = os.getenv("APP_VERSION", "v2.5.0")
+    build_id: str = os.getenv("BUILD_ID", "v2.5.0-policy-evidence-labels")
     build_timestamp_utc: str = os.getenv("BUILD_TIMESTAMP_UTC", datetime.now(timezone.utc).isoformat())
-    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-15-v2.4.1")
+    artifact_schema_version: str = os.getenv("ARTIFACT_SCHEMA_VERSION", "2026-05-17-v2.5.0")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 
@@ -74,6 +74,10 @@ class AppSettings:
     replay_policy_min_lift_vs_all: float = float(os.getenv("REPLAY_POLICY_MIN_LIFT_VS_ALL", "0.04"))
     replay_policy_min_avg_end_return_pct: float = float(os.getenv("REPLAY_POLICY_MIN_AVG_END_RETURN_PCT", "0.01"))
     replay_policy_max_stop_rate: float = float(os.getenv("REPLAY_POLICY_MAX_STOP_RATE", "0.60"))
+    policy_evidence_strong_min_observations: int = int(os.getenv("POLICY_EVIDENCE_STRONG_MIN_OBSERVATIONS", "250"))
+    policy_evidence_strong_min_lift_vs_all: float = float(os.getenv("POLICY_EVIDENCE_STRONG_MIN_LIFT_VS_ALL", "0.08"))
+    policy_evidence_strong_min_avg_end_return_pct: float = float(os.getenv("POLICY_EVIDENCE_STRONG_MIN_AVG_END_RETURN_PCT", "0.025"))
+    policy_evidence_strong_max_stop_rate: float = float(os.getenv("POLICY_EVIDENCE_STRONG_MAX_STOP_RATE", "0.55"))
 
     live_policy_min_replay_surface_score: float = float(os.getenv("LIVE_POLICY_MIN_REPLAY_SURFACE_SCORE", "80"))
     live_policy_max_policy_stop_rate: float = float(os.getenv("LIVE_POLICY_MAX_POLICY_STOP_RATE", "0.55"))
